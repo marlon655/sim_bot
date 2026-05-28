@@ -51,7 +51,7 @@ def generate_launch_description():
         description='Activates the navigation stack')
 
     declare_octomap = DeclareLaunchArgument(
-        name='octomap', default_value='True',
+        name='octomap', default_value='False',
         description='Activates 3D mapping if set to true')
 
     # Launch Robot State Publisher Node

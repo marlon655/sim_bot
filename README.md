@@ -1,3 +1,4 @@
+#MODIFICADO PRA JAZZY
 # Simulated Robots Package 
 Minimal simulation for mobile robots using ROS2 and Gazebo(Classic and New). This package provides all of the necesarry files to get a simulated robot up and running. This includes the urdf, parameters and launch files for a robot capable of sensing its enviroment, mapping and localization, as well as autonamous and tele-operated navigation. There are two robots available: a 2-wheeled and a 4-wheeled differential drive robot. Currently four sensors are implemented: camera, depth camera, and 2D & 3D lidars. The package has been tested to work humble and foxy, it will be upgraded to work with jazzy in the near future. 
 

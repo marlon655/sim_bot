@@ -8,25 +8,25 @@
     </physics>
 
     <plugin
-        filename="ignition-gazebo-physics-system"
-        name="ignition::gazebo::systems::Physics">
+        filename="libgz-sim-physics-system.so"
+        name="gz::sim::systems::Physics">
     </plugin>
     <plugin
-        filename="ignition-gazebo-user-commands-system"
-        name="ignition::gazebo::systems::UserCommands">
+        filename="libgz-sim-user-commands-system.so"
+        name="gz::sim::systems::UserCommands">
     </plugin>
     <plugin
-        filename="ignition-gazebo-scene-broadcaster-system"
-        name="ignition::gazebo::systems::SceneBroadcaster">
+        filename="libgz-sim-scene-broadcaster-system.so"
+        name="gz::sim::systems::SceneBroadcaster">
     </plugin>
     <plugin
-        filename="ignition-gazebo-sensors-system"
-        name="ignition::gazebo::systems::Sensors">
+        filename="libgz-sim-sensors-system.so"
+        name="gz::sim::systems::Sensors">
         <render_engine>ogre2</render_engine>
     </plugin>
     <plugin 
-        filename="ignition-gazebo-contact-system"
-        name="ignition::gazebo::systems::Contact">
+        filename="libgz-sim-contact-system.so"
+        name="gz::sim::systems::Contact">
     </plugin>
     
     <model name='ground_plane'>
@@ -80,37 +80,37 @@
     </model>
 
     <include>
-      <uri>file:///home/alex/.ignition/fuel/fuel.gazebosim.org/openrobotics/models/construction barrel/4</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
       <name>Construction Barrel</name>
       <pose>2.8721 1.22966 -0 0 -0 -0</pose>
     </include>
     <include>
-      <uri>file:///home/alex/.ignition/fuel/fuel.gazebosim.org/openrobotics/models/construction barrel/4</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
       <name>Construction Barrel_1</name>
       <pose>1.67575 -1.00845 -0 0 -0 -0</pose>
     </include>
     <include>
-      <uri>file:///home/alex/.ignition/fuel/fuel.gazebosim.org/openrobotics/models/construction barrel/4</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
       <name>Construction Barrel_2</name>
       <pose>4.19457 -0.635533 -0 0 0 0</pose>
     </include>
     <include>
-      <uri>file:///home/alex/.ignition/fuel/fuel.gazebosim.org/openrobotics/models/construction barrel/4</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
       <name>Construction Barrel_3</name>
       <pose>5.34007 -3.04639 -0 0 -0 -0</pose>
     </include>
     <include>
-      <uri>file:///home/alex/.ignition/fuel/fuel.gazebosim.org/openrobotics/models/construction barrel/4</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
       <name>Construction Barrel_4</name>
       <pose>2.6617 -2.7429 -0 0 -0 -0</pose>
     </include>
     <include>
-      <uri>file:///home/alex/.ignition/fuel/fuel.gazebosim.org/openrobotics/models/construction barrel/4</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
       <name>Construction Barrel_5</name>
       <pose>4.07286 3.50308 -0 0 -0 -0</pose>
     </include>
     <include>
-      <uri>file:///home/alex/.ignition/fuel/fuel.gazebosim.org/openrobotics/models/construction barrel/4</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
       <name>Construction Barrel_6</name>
       <pose>5.41455 1.43866 -0 0 -0 -0</pose>
     </include>

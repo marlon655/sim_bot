@@ -9,13 +9,18 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- Add dependencies -->
-  <depend>ros-humble-xacro</depend>
-  <depend>ros-humble-twist-mux</depend>
-  <depend>ros-humble-slam-toolbox</depend>
-  <depend>ros-humble-navigation2</depend>     
-  <depend>ros-humble-ros-gz</depend>
-  <depend>ros-humble-octomap</depend>
+  <depend>xacro</depend>
+  <depend>robot_state_publisher</depend>
+  <depend>rviz2</depend>
+  <depend>joy</depend>
+  <depend>teleop_twist_joy</depend>
+  <depend>twist_mux</depend>
+  <depend>slam_toolbox</depend>
+  <depend>nav2_bringup</depend>
+  <depend>nav2_common</depend>
+  <depend>ros_gz_sim</depend>
+  <depend>ros_gz_bridge</depend>
+  <depend>ros_gz_image</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
