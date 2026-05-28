@@ -158,3 +158,13 @@ ros2 launch sim_bot diff_bot.launch.py octomap:=True
 - Na primeira execucao, o Gazebo pode baixar modelos do Gazebo Fuel usados no mundo `test.world`.
 - Se o pacote nao for encontrado, confira se o workspace correto foi carregado com `source ~/sim_ws/install/setup.bash`.
 - Se outro workspace estiver no seu `.bashrc`, carregue primeiro `/opt/ros/jazzy/setup.bash` e depois `~/sim_ws/install/setup.bash`.
+
+## Modificacoes
+
+- Atualizado para ROS 2 Jazzy, Ubuntu 24.04 e Gazebo Sim 8.
+- Dependencias do `package.xml` foram trocadas de pacotes fixos `ros-humble-*` para nomes genericos de pacotes ROS 2, permitindo resolucao correta via `rosdep` no Jazzy.
+- Mundos SDF foram ajustados de plugins antigos `ignition-gazebo-*` para plugins `gz-sim-*`.
+- Caminhos locais de modelos do Gazebo Fuel foram removidos do mundo `test.world` e substituidos por URIs publicas.
+- Parametros do Nav2 foram atualizados para nomes de plugins compativeis com Jazzy.
+- `octomap` passou a iniciar desativado por padrao, pois e opcional para a simulacao 2D com SLAM/Nav2.
+- Frames das cameras foram ajustados para corrigir a exibicao do `/camera/points` no RViz: `camera_link_optical` agora fica alinhado com `camera_link`, e a depth camera publica a nuvem usando `camera_link_optical`.
