@@ -14,13 +14,13 @@ def generate_launch_description():
     package_name='sim_bot' 
 
     # Launch configurations
-    world = LaunchConfiguration('world')
-    headless = LaunchConfiguration('headless')
-    rviz = LaunchConfiguration('rviz')
-    joy = LaunchConfiguration('joy')
-    slam = LaunchConfiguration('slam')
-    nav = LaunchConfiguration('nav')
-    octomap = LaunchConfiguration('octomap')
+    read_world = LaunchConfiguration('world')
+    read_headless = LaunchConfiguration('headless')
+    read_rviz = LaunchConfiguration('rviz')
+    read_joy = LaunchConfiguration('joy')
+    read_slam = LaunchConfiguration('slam')
+    read_nav = LaunchConfiguration('nav')
+    read_octomap = LaunchConfiguration('octomap')
 
     # Path to default world 
     world_path = os.path.join(get_package_share_directory(package_name),'worlds', 'test.world')
@@ -64,7 +64,7 @@ def generate_launch_description():
     
     # Launch Joystick Tele Operation Node if activated (active by default)
     joystick = GroupAction(
-        condition=IfCondition(joy),
+        condition=IfCondition(read_joy),
         actions=[IncludeLaunchDescription(
                     PythonLaunchDescriptionSource([os.path.join(
                         get_package_share_directory(package_name),'launch','teleop.launch.py'
@@ -84,12 +84,12 @@ def generate_launch_description():
     gazebo_server = IncludeLaunchDescription(
                     PythonLaunchDescriptionSource([os.path.join(
                         get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py'
-                    )]), launch_arguments={'gz_args': ['-r -s -v1 ', world], 'on_exit_shutdown': 'true'}.items()
+                    )]), launch_arguments={'gz_args': ['-r -s -v1 ', read_world], 'on_exit_shutdown': 'true'}.items()
     )
 
     # Launch the gazebo client to visualize the simulation only if headless is declared as False
     gazebo_client = GroupAction(
-        condition=IfCondition(PythonExpression(['not ', headless])),
+        condition=IfCondition(PythonExpression(['not ', read_headless])),
         actions=[IncludeLaunchDescription(
                     PythonLaunchDescriptionSource([os.path.join(
                         get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py'
@@ -125,7 +125,7 @@ def generate_launch_description():
     # Launch Rviz with diff bot rviz file
     rviz_config_file = os.path.join(get_package_share_directory(package_name), 'rviz', 'bot.rviz')
     rviz2 = GroupAction(
-        condition=IfCondition(rviz),
+        condition=IfCondition(read_rviz),
         actions=[Node(
                     package='rviz2',
                     executable='rviz2',
@@ -141,7 +141,7 @@ def generate_launch_description():
 
     # Launch Simultaneous Localization and Mapping
     slam_node = GroupAction(
-        condition=IfCondition(slam),
+        condition=IfCondition(read_slam),
         actions=[IncludeLaunchDescription(
                     PythonLaunchDescriptionSource([os.path.join(
                         get_package_share_directory(package_name),'launch','slam.launch.py'
@@ -151,7 +151,7 @@ def generate_launch_description():
     # Launch the navigation stack
     nav_params = os.path.join(get_package_share_directory(package_name), 'config', 'nav_params.yaml')
     nav_node = GroupAction(
-        condition=IfCondition(nav),
+        condition=IfCondition(read_nav),
         actions=[IncludeLaunchDescription(
                     PythonLaunchDescriptionSource([os.path.join(
                         get_package_share_directory(package_name),'launch','nav.launch.py'
@@ -160,7 +160,7 @@ def generate_launch_description():
 
     # Launch 3D mapping stack 
     octomap_node = GroupAction(
-        condition=IfCondition(octomap),
+        condition=IfCondition(read_octomap),
         actions=[Node(package='octomap_server',
                       executable='octomap_server_node',
                       name='octomap_server',
