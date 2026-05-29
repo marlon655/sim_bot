@@ -169,3 +169,4 @@ ros2 launch sim_bot diff_bot.launch.py octomap:=True
 - `octomap` passou a iniciar desativado por padrao, pois e opcional para a simulacao 2D com SLAM/Nav2.
 - Frames das cameras foram ajustados para corrigir a exibicao do `/camera/points` no RViz: `camera_link_optical` agora fica alinhado com `camera_link`, e a depth camera publica a nuvem usando `camera_link_optical`.
 - Variaveis locais de leitura dos `LaunchConfiguration` em `diff_bot.launch.py` foram renomeadas com prefixo `read_`, deixando mais claro que elas apenas leem os argumentos declarados no launch, sem alterar os nomes usados no terminal.
+- Adicionado o modelo `aceleradora_world` com STL local, world `aceleradora.world` e configuracao do `GZ_SIM_RESOURCE_PATH` nos launch files para resolver URIs `model://` no Gazebo.

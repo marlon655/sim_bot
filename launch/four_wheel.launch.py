@@ -5,7 +5,7 @@ from launch.conditions import IfCondition
 from ament_index_python.packages import get_package_share_directory
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, GroupAction
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, GroupAction, AppendEnvironmentVariable
 
 
 def generate_launch_description():
@@ -24,6 +24,7 @@ def generate_launch_description():
 
     # Path to default world 
     world_path = os.path.join(get_package_share_directory(package_name),'worlds', 'test.world')
+    models_path = os.path.join(get_package_share_directory(package_name), 'models')
 
     # Launch Arguments
     declare_world = DeclareLaunchArgument(
@@ -53,6 +54,11 @@ def generate_launch_description():
     declare_octomap = DeclareLaunchArgument(
         name='octomap', default_value='False',
         description='Activates 3D mapping if set to true')
+
+    gazebo_models_path = AppendEnvironmentVariable(
+        name='GZ_SIM_RESOURCE_PATH',
+        value=models_path,
+        separator=':')
 
     # Launch Robot State Publisher Node
     urdf_path = os.path.join(get_package_share_directory(package_name),'description','four_wheel.urdf.xacro')
@@ -181,6 +187,7 @@ def generate_launch_description():
         declare_slam,
         declare_nav,
         declare_octomap,
+        gazebo_models_path,
 
         # Launch the nodes
         rviz2,
