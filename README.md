@@ -101,6 +101,7 @@ rviz:=False        Nao abre o RViz
 joy:=False         Desativa teleoperacao por joystick
 slam:=False        Desativa SLAM
 nav:=False         Desativa Nav2
+map:=<path>        Mapa YAML para usar com Nav2 sem SLAM. Inicia map_server e AMCL
 octomap:=True      Ativa mapeamento 3D com octomap_server
 ```
 
@@ -139,6 +140,49 @@ source install/setup.bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/cmd_vel_joy
 ```
 
+## Navegacao Com Mapa Existente
+
+Para navegar usando um mapa `.yaml/.pgm` ja salvo, rode sem SLAM e passe o arquivo YAML no argumento `map`.
+
+Exemplo usando o mundo e o mapa da aceleradora:
+
+```bash
+cd ~/sim_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+
+ros2 launch sim_bot diff_bot.launch.py \
+  world:=$PWD/src/sim_bot/worlds/aceleradora.world \
+  slam:=False \
+  nav:=True \
+  rviz:=True \
+  joy:=False \
+  map:=$PWD/src/sim_bot/config_map/aceleradora/aceleradora.yaml
+```
+
+O arquivo YAML deve apontar para o `.pgm`. Se os dois arquivos estiverem na mesma pasta, o caminho relativo e suficiente:
+
+```yaml
+image: aceleradora.pgm
+resolution: 0.050000
+origin: [-49.632501, -5.931761, 0.000000]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+```
+
+Quando `map:=...` e informado, `nav.launch.py` inicia:
+
+```text
+map_server                  Carrega e publica o /map
+amcl                        Localiza o robo no mapa e publica map -> odom
+lifecycle_manager_localization  Ativa map_server e amcl automaticamente
+```
+
+No RViz, primeiro use `2D Pose Estimate` para informar a pose inicial do robo no mapa. Depois use `Nav2 Goal` para enviar o objetivo.
+
+O Nav2 publica comandos diretamente em `/cmd_vel`, que e o topico usado pelo bridge ROS 2 <-> Gazebo. Os parametros `enable_stamped_cmd_vel: false` em `controller_server` e `behavior_server` mantem esse topico como `geometry_msgs/msg/Twist`, compativel com o Gazebo Sim.
+
 ## Octomap
 
 O `octomap` fica desativado por padrao. Para usar mapeamento 3D, instale:
@@ -170,3 +214,6 @@ ros2 launch sim_bot diff_bot.launch.py octomap:=True
 - Frames das cameras foram ajustados para corrigir a exibicao do `/camera/points` no RViz: `camera_link_optical` agora fica alinhado com `camera_link`, e a depth camera publica a nuvem usando `camera_link_optical`.
 - Variaveis locais de leitura dos `LaunchConfiguration` em `diff_bot.launch.py` foram renomeadas com prefixo `read_`, deixando mais claro que elas apenas leem os argumentos declarados no launch, sem alterar os nomes usados no terminal.
 - Adicionado o modelo `aceleradora_world` com STL local, world `aceleradora.world` e configuracao do `GZ_SIM_RESOURCE_PATH` nos launch files para resolver URIs `model://` no Gazebo.
+- Adicionado suporte a navegacao com mapa existente via argumento `map:=...`, iniciando `nav2_map_server`, `nav2_amcl` e `lifecycle_manager_localization`.
+- Adicionadas dependencias explicitas `nav2_map_server` e `nav2_amcl` no `package.xml`.
+- Ajustado o Nav2 para publicar `/cmd_vel` como `geometry_msgs/msg/Twist` com `enable_stamped_cmd_vel: false`, evitando conflito com `TwistStamped` no bridge do Gazebo.
