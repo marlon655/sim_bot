@@ -18,6 +18,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     autostart = LaunchConfiguration('autostart')
     params_file = LaunchConfiguration('params_file')
+    map_yaml = LaunchConfiguration('map')
     use_composition = LaunchConfiguration('use_composition')
     container_name = LaunchConfiguration('container_name')
     container_name_full = (namespace, '/', container_name)
@@ -32,6 +33,8 @@ def generate_launch_description():
                        'waypoint_follower',
                        'velocity_smoother'
     ]
+    localization_nodes = ['map_server', 'amcl']
+    use_map = PythonExpression(["'", map_yaml, "' != ''"])
 
     remappings = [('/tf', 'tf'),
                   ('/tf_static', 'tf_static')]
@@ -67,6 +70,11 @@ def generate_launch_description():
         default_value=os.path.join(bringup_dir, 'config', 'nav_params.yaml'),
         description='Full path to the ROS2 parameters file to use for all launched nodes')
 
+    declare_map_cmd = DeclareLaunchArgument(
+        'map',
+        default_value='',
+        description='Full path to the map YAML file. If set, starts map_server and AMCL.')
+
     declare_autostart_cmd = DeclareLaunchArgument(
         'autostart', default_value='true',
         description='Automatically startup the nav2 stack')
@@ -87,6 +95,40 @@ def generate_launch_description():
         'log_level', default_value='info',
         description='log level')
 
+    localization = GroupAction(
+        condition=IfCondition(use_map),
+        actions=[
+            Node(
+                package='nav2_map_server',
+                executable='map_server',
+                name='map_server',
+                output='screen',
+                parameters=[{'use_sim_time': use_sim_time},
+                            {'yaml_filename': map_yaml}],
+                arguments=['--ros-args', '--log-level', log_level],
+                remappings=remappings),
+            Node(
+                package='nav2_amcl',
+                executable='amcl',
+                name='amcl',
+                output='screen',
+                parameters=[configured_params,
+                            {'use_sim_time': use_sim_time},
+                            {'scan_topic': 'scan'}],
+                arguments=['--ros-args', '--log-level', log_level],
+                remappings=remappings),
+            Node(
+                package='nav2_lifecycle_manager',
+                executable='lifecycle_manager',
+                name='lifecycle_manager_localization',
+                output='screen',
+                arguments=['--ros-args', '--log-level', log_level],
+                parameters=[{'use_sim_time': use_sim_time},
+                            {'autostart': autostart},
+                            {'node_names': localization_nodes}]),
+        ]
+    )
+
     load_nodes = GroupAction(
         condition=IfCondition(PythonExpression(['not ', use_composition])),
         actions=[
@@ -98,7 +140,7 @@ def generate_launch_description():
                 respawn_delay=2.0,
                 parameters=[configured_params],
                 arguments=['--ros-args', '--log-level', log_level],
-                remappings=remappings + [('cmd_vel', 'cmd_vel_nav_smoothed')]),
+                remappings=remappings),
             Node(
                 package='nav2_smoother',
                 executable='smoother_server',
@@ -128,7 +170,7 @@ def generate_launch_description():
                 respawn_delay=2.0,
                 parameters=[configured_params],
                 arguments=['--ros-args', '--log-level', log_level],
-                remappings=remappings + [('cmd_vel', 'cmd_vel_nav_smoothed')]),
+                remappings=remappings),
             Node(
                 package='nav2_bt_navigator',
                 executable='bt_navigator',
@@ -181,7 +223,7 @@ def generate_launch_description():
                 plugin='nav2_controller::ControllerServer',
                 name='controller_server',
                 parameters=[configured_params],
-                remappings=remappings + [('cmd_vel', 'cmd_vel_nav')]),
+                remappings=remappings),
             ComposableNode(
                 package='nav2_smoother',
                 plugin='nav2_smoother::SmootherServer',
@@ -239,12 +281,14 @@ def generate_launch_description():
     ld.add_action(declare_namespace_cmd)
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
+    ld.add_action(declare_map_cmd)
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_use_composition_cmd)
     ld.add_action(declare_container_name_cmd)
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
     # Add the actions to launch all of the navigation nodes
+    ld.add_action(localization)
     ld.add_action(load_nodes)
     ld.add_action(load_composable_nodes)
 

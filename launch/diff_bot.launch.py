@@ -20,6 +20,7 @@ def generate_launch_description():
     read_joy = LaunchConfiguration('joy')
     read_slam = LaunchConfiguration('slam')
     read_nav = LaunchConfiguration('nav')
+    read_map = LaunchConfiguration('map')
     read_octomap = LaunchConfiguration('octomap')
 
     # Path to default world 
@@ -50,6 +51,10 @@ def generate_launch_description():
     declare_nav = DeclareLaunchArgument(
         name='nav', default_value='True',
         description='Activates the navigation stack')
+
+    declare_map = DeclareLaunchArgument(
+        name='map', default_value='',
+        description='Full path to a map YAML file. If set, Nav2 starts map_server and AMCL.')
 
     declare_octomap = DeclareLaunchArgument(
         name='octomap', default_value='False',
@@ -161,7 +166,11 @@ def generate_launch_description():
         actions=[IncludeLaunchDescription(
                     PythonLaunchDescriptionSource([os.path.join(
                         get_package_share_directory(package_name),'launch','nav.launch.py'
-                    )]), launch_arguments={'use_sim_time': 'true', 'params_file': nav_params}.items())]
+                    )]), launch_arguments={
+                        'use_sim_time': 'true',
+                        'params_file': nav_params,
+                        'map': read_map
+                    }.items())]
     )
 
     # Launch 3D mapping stack 
@@ -186,6 +195,7 @@ def generate_launch_description():
         declare_world,
         declare_slam,
         declare_nav,
+        declare_map,
         declare_octomap,
         gazebo_models_path,
 
