@@ -202,6 +202,7 @@ ros2 launch sim_bot diff_bot.launch.py octomap:=True
 - Na primeira execucao, o Gazebo pode baixar modelos do Gazebo Fuel usados no mundo `test.world`.
 - Se o pacote nao for encontrado, confira se o workspace correto foi carregado com `source ~/sim_ws/install/setup.bash`.
 - Se outro workspace estiver no seu `.bashrc`, carregue primeiro `/opt/ros/jazzy/setup.bash` e depois `~/sim_ws/install/setup.bash`.
+- Novas alteracoes devem ser revisadas por Pull Request para a branch `dev` antes de serem integradas na `main`.
 
 ## Modificacoes
 
