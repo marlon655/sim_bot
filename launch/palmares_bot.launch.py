@@ -72,16 +72,6 @@ def generate_launch_description():
             launch_arguments={'use_sim_time': 'true'}.items())]
     )
 
-    # ── Twist Mux ─────────────────────────────────────────────────────────
-    twist_mux_params = os.path.join(
-        get_package_share_directory(package_name), 'config', 'twist_mux_params.yaml')
-    twist_mux = Node(
-        package='twist_mux',
-        executable='twist_mux',
-        parameters=[twist_mux_params, {'use_sim_time': True}],
-        remappings=[('/cmd_vel_out', '/cmd_vel')]
-    )
-
     # ── Gazebo server ─────────────────────────────────────────────────────
     gazebo_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(
@@ -176,7 +166,6 @@ def generate_launch_description():
         # Launch nodes
         rviz2,
         rsp,
-        twist_mux,
         joystick,
         gazebo_server,
         gazebo_client,
