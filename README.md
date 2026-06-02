@@ -219,3 +219,4 @@ ros2 launch sim_bot diff_bot.launch.py octomap:=True
 - Adicionadas dependencias explicitas `nav2_map_server` e `nav2_amcl` no `package.xml`.
 - Ajustado o Nav2 para publicar `/cmd_vel` como `geometry_msgs/msg/Twist` com `enable_stamped_cmd_vel: false`, evitando conflito com `TwistStamped` no bridge do Gazebo.
 - Removido o `twist_mux`; teleoperacao e Nav2 agora publicam diretamente em `/cmd_vel`. Use apenas um modo por vez, por exemplo `joy:=False` ao rodar com Nav2.
+- Simplificado o `nav.launch.py`, removendo o modo composable (`use_composition`) e mantendo apenas a inicializacao direta dos nós Nav2 em processos separados.
