@@ -137,7 +137,7 @@ Em outro terminal:
 cd ~/sim_ws
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/cmd_vel_joy
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
 ## Navegacao Com Mapa Existente
@@ -218,3 +218,4 @@ ros2 launch sim_bot diff_bot.launch.py octomap:=True
 - Adicionado suporte a navegacao com mapa existente via argumento `map:=...`, iniciando `nav2_map_server`, `nav2_amcl` e `lifecycle_manager_localization`.
 - Adicionadas dependencias explicitas `nav2_map_server` e `nav2_amcl` no `package.xml`.
 - Ajustado o Nav2 para publicar `/cmd_vel` como `geometry_msgs/msg/Twist` com `enable_stamped_cmd_vel: false`, evitando conflito com `TwistStamped` no bridge do Gazebo.
+- Removido o `twist_mux`; teleoperacao e Nav2 agora publicam diretamente em `/cmd_vel`. Use apenas um modo por vez, por exemplo `joy:=False` ao rodar com Nav2.

@@ -29,13 +29,12 @@ def generate_launch_description():
             parameters=[joy_params, {'use_sim_time': use_sim_time}],
     )
 
-    # Launches the tele-operation node and remaps its output to /cmd_vel_joy
+    # Launches the tele-operation node on /cmd_vel
     teleop_node = Node(
             package='teleop_twist_joy',
             executable='teleop_node',
             name='teleop_node',
-            parameters=[joy_params, {'use_sim_time': use_sim_time}],
-            remappings=[('/cmd_vel','/cmd_vel_joy')]
+            parameters=[joy_params, {'use_sim_time': use_sim_time}]
     )
 
     # Launch!
