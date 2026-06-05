@@ -102,7 +102,6 @@ joy:=False         Desativa teleoperacao por joystick
 slam:=False        Desativa SLAM
 nav:=False         Desativa Nav2
 map:=<path>        Mapa YAML para usar com Nav2 sem SLAM. Inicia map_server e AMCL
-octomap:=True      Ativa mapeamento 3D com octomap_server
 ```
 
 Exemplo rodando sem joystick e sem Nav2:
@@ -183,20 +182,6 @@ No RViz, primeiro use `2D Pose Estimate` para informar a pose inicial do robo no
 
 O Nav2 publica comandos diretamente em `/cmd_vel`, que e o topico usado pelo bridge ROS 2 <-> Gazebo. Os parametros `enable_stamped_cmd_vel: false` em `controller_server` e `behavior_server` mantem esse topico como `geometry_msgs/msg/Twist`, compativel com o Gazebo Sim.
 
-## Octomap
-
-O `octomap` fica desativado por padrao. Para usar mapeamento 3D, instale:
-
-```bash
-sudo apt install -y ros-jazzy-octomap-server
-```
-
-Depois rode:
-
-```bash
-ros2 launch sim_bot diff_bot.launch.py octomap:=True
-```
-
 ## Observacoes
 
 - Na primeira execucao, o Gazebo pode baixar modelos do Gazebo Fuel usados no mundo `test.world`.
@@ -211,7 +196,6 @@ ros2 launch sim_bot diff_bot.launch.py octomap:=True
 - Mundos SDF foram ajustados de plugins antigos `ignition-gazebo-*` para plugins `gz-sim-*`.
 - Caminhos locais de modelos do Gazebo Fuel foram removidos do mundo `test.world` e substituidos por URIs publicas.
 - Parametros do Nav2 foram atualizados para nomes de plugins compativeis com Jazzy.
-- `octomap` passou a iniciar desativado por padrao, pois e opcional para a simulacao 2D com SLAM/Nav2.
 - Frames das cameras foram ajustados para corrigir a exibicao do `/camera/points` no RViz: `camera_link_optical` agora fica alinhado com `camera_link`, e a depth camera publica a nuvem usando `camera_link_optical`.
 - Variaveis locais de leitura dos `LaunchConfiguration` em `diff_bot.launch.py` foram renomeadas com prefixo `read_`, deixando mais claro que elas apenas leem os argumentos declarados no launch, sem alterar os nomes usados no terminal.
 - Adicionado o modelo `aceleradora_world` com STL local, world `aceleradora.world` e configuracao do `GZ_SIM_RESOURCE_PATH` nos launch files para resolver URIs `model://` no Gazebo.
