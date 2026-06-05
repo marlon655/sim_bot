@@ -411,27 +411,6 @@ Visualization Manager:
           Value: true
       Enabled: true
       Name: Navigation
-    - Class: rviz_common/Group
-      Displays:
-        - Class: octomap_rviz_plugins/OccupancyGrid
-          Enabled: true
-          Max. Height Display: inf
-          Max. Octree Depth: 16
-          Min. Height Display: -inf
-          Name: OccupancyGrid
-          Topic:
-            Depth: 5
-            Durability Policy: Volatile
-            Filter size: 10
-            History Policy: Keep Last
-            Reliability Policy: Reliable
-            Value: /octomap_binary
-          Value: true
-          Voxel Alpha: 1
-          Voxel Coloring: Z-Axis
-          Voxel Rendering: Occupied Voxels
-      Enabled: true
-      Name: Octomap
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

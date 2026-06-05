@@ -49,17 +49,17 @@ Adicione apenas os arquivos que devem entrar no commit:
 git add README.md
 ```
 
-Se tiver certeza que todas as alteracoes listadas no `git status` devem entrar
-no commit, tambem pode usar:
-
-```bash
-git add .
-```
-
 Crie o commit:
 
 ```bash
 git commit -m "Documenta fluxo de pull request"
+```
+
+OBS: Se tiver certeza que todas as alteracoes listadas no `git status` devem entrar
+no commit, tambem pode usar:
+
+```bash
+git add .
 ```
 
 
