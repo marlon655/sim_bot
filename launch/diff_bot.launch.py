@@ -21,6 +21,7 @@ def generate_launch_description():
     read_slam = LaunchConfiguration('slam')
     read_nav = LaunchConfiguration('nav')
     read_map = LaunchConfiguration('map')
+    read_params_file = LaunchConfiguration('params_file')
 
     # Path to default world 
     world_path = os.path.join(get_package_share_directory(package_name),'worlds', 'test.world')
@@ -54,6 +55,12 @@ def generate_launch_description():
     declare_map = DeclareLaunchArgument(
         name='map', default_value='',
         description='Full path to a map YAML file. If set, Nav2 starts map_server and AMCL.')
+
+    declare_params_file = DeclareLaunchArgument(
+        name='params_file',
+        default_value=os.path.join(
+            get_package_share_directory(package_name), 'config', 'nav_params.yaml'),
+        description='Full path to the Nav2 parameters file')
 
     gazebo_models_path = AppendEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',
@@ -146,7 +153,6 @@ def generate_launch_description():
     )
 
     # Launch the navigation stack
-    nav_params = os.path.join(get_package_share_directory(package_name), 'config', 'nav_params.yaml')
     nav_node = GroupAction(
         condition=IfCondition(read_nav),
         actions=[IncludeLaunchDescription(
@@ -154,7 +160,7 @@ def generate_launch_description():
                         get_package_share_directory(package_name),'launch','nav.launch.py'
                     )]), launch_arguments={
                         'use_sim_time': 'true',
-                        'params_file': nav_params,
+                        'params_file': read_params_file,
                         'map': read_map
                     }.items())]
     )
@@ -169,6 +175,7 @@ def generate_launch_description():
         declare_slam,
         declare_nav,
         declare_map,
+        declare_params_file,
         gazebo_models_path,
 
         # Launch the nodes

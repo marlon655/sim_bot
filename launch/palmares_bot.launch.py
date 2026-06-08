@@ -5,7 +5,7 @@ from launch.conditions import IfCondition
 from ament_index_python.packages import get_package_share_directory
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, GroupAction
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, GroupAction, AppendEnvironmentVariable
 
 
 def generate_launch_description():
@@ -20,10 +20,13 @@ def generate_launch_description():
     read_joy = LaunchConfiguration('joy')
     read_slam = LaunchConfiguration('slam')
     read_nav = LaunchConfiguration('nav')
+    read_map = LaunchConfiguration('map')
+    read_params_file = LaunchConfiguration('params_file')
 
     # Path to default world
     world_path = os.path.join(
         get_package_share_directory(package_name), 'worlds', 'test.world')
+    models_path = os.path.join(get_package_share_directory(package_name), 'models')
 
     # Launch Arguments
     declare_world = DeclareLaunchArgument(
@@ -49,6 +52,21 @@ def generate_launch_description():
     declare_nav = DeclareLaunchArgument(
         name='nav', default_value='True',
         description='Enable Nav2 navigation stack')
+
+    declare_map = DeclareLaunchArgument(
+        name='map', default_value='',
+        description='Full path to a map YAML file. If set, Nav2 starts map_server and AMCL.')
+
+    declare_params_file = DeclareLaunchArgument(
+        name='params_file',
+        default_value=os.path.join(
+            get_package_share_directory(package_name), 'config', 'nav_params.yaml'),
+        description='Full path to the Nav2 parameters file')
+
+    gazebo_models_path = AppendEnvironmentVariable(
+        name='GZ_SIM_RESOURCE_PATH',
+        value=models_path,
+        separator=':')
 
     # ── Robot State Publisher ──────────────────────────────────────────────
     urdf_path = os.path.join(
@@ -99,6 +117,8 @@ def generate_launch_description():
         executable='create',
         arguments=['-topic', 'robot_description',
                    '-name', 'palmares_bot',
+                   '-x', '18.34406852722168',
+                   '-y', '22.93574333190918',
                    '-z', '0.15'],
         output='screen'
     )
@@ -143,15 +163,17 @@ def generate_launch_description():
     )
 
     # ── Nav2 (optional) ───────────────────────────────────────────────────
-    nav_params = os.path.join(
-        get_package_share_directory(package_name), 'config', 'nav_params.yaml')
     nav_node = GroupAction(
         condition=IfCondition(read_nav),
         actions=[IncludeLaunchDescription(
             PythonLaunchDescriptionSource([os.path.join(
                 get_package_share_directory(package_name), 'launch', 'nav.launch.py'
             )]),
-            launch_arguments={'use_sim_time': 'true', 'params_file': nav_params}.items())]
+            launch_arguments={
+                'use_sim_time': 'true',
+                'params_file': read_params_file,
+                'map': read_map,
+            }.items())]
     )
 
     return LaunchDescription([
@@ -162,6 +184,9 @@ def generate_launch_description():
         declare_world,
         declare_slam,
         declare_nav,
+        declare_map,
+        declare_params_file,
+        gazebo_models_path,
 
         # Launch nodes
         rviz2,
