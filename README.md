@@ -92,7 +92,7 @@ O retorno esperado deve apontar para:
 
 ## Argumentos De Launch
 
-Os principais argumentos aceitos por `diff_bot.launch.py` e `four_wheel.launch.py`:
+Os principais argumentos aceitos por `diff_bot.launch.py` e `palmares_bot.launch.py`:
 
 ```text
 world:=<path>       Mundo SDF a carregar. Padrao: test.world
@@ -102,6 +102,7 @@ joy:=False         Desativa teleoperacao por joystick
 slam:=False        Desativa SLAM
 nav:=False         Desativa Nav2
 map:=<path>        Mapa YAML para usar com Nav2 sem SLAM. Inicia map_server e AMCL
+params_file:=<path> Arquivo YAML de parametros do Nav2. Padrao: config/nav_params.yaml
 ```
 
 Exemplo rodando sem joystick e sem Nav2:
