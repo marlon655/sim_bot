@@ -22,6 +22,8 @@ def generate_launch_description():
     read_nav = LaunchConfiguration('nav')
     read_map = LaunchConfiguration('map')
     read_params_file = LaunchConfiguration('params_file')
+    read_route = LaunchConfiguration('route')
+    read_speed_filter = LaunchConfiguration('speed_filter')
 
     # Path to default world
     world_path = os.path.join(
@@ -62,6 +64,16 @@ def generate_launch_description():
         default_value=os.path.join(
             get_package_share_directory(package_name), 'config', 'nav_params.yaml'),
         description='Full path to the Nav2 parameters file')
+
+    declare_route = DeclareLaunchArgument(
+        name='route',
+        default_value='False',
+        description='Start nav2_route route_server if true')
+
+    declare_speed_filter = DeclareLaunchArgument(
+        name='speed_filter',
+        default_value='False',
+        description='Start Nav2 speed filter servers if true')
 
     gazebo_models_path = AppendEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',
@@ -173,6 +185,8 @@ def generate_launch_description():
                 'use_sim_time': 'true',
                 'params_file': read_params_file,
                 'map': read_map,
+                'route': read_route,
+                'speed_filter': read_speed_filter,
             }.items())]
     )
 
@@ -186,6 +200,8 @@ def generate_launch_description():
         declare_nav,
         declare_map,
         declare_params_file,
+        declare_route,
+        declare_speed_filter,
         gazebo_models_path,
 
         # Launch nodes

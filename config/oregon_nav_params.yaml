@@ -23,12 +23,14 @@ bt_navigator:
     navigate_through_poses:
       plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
 
-    # OREGON: usava uma Behavior Tree propria do nav_hub.
-    # Nao ativar enquanto o arquivo XML nao estiver dentro do sim_bot.
-    # default_nav_to_pose_bt_xml: "/home/ubuntu/ros2_ws/src/nav_hub/btree/nav_on_route_graph_oregon.xml"
+    # OREGON: Behavior Tree de rota por grafo adaptada para o sim_bot.
+    # Requer route:=True, pois chama /compute_route no route_server.
+    default_nav_to_pose_bt_xml: "$(find-pkg-share sim_bot)/btree/nav_on_route_graph_sim.xml"
 
     error_code_names:
       - compute_path_error_code
+      - compute_route_error_code
+      - smoother_error_code
       - follow_path_error_code
 
 bt_navigator_navigate_through_poses_rclcpp_node:
@@ -131,8 +133,8 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.05
+      yaw_goal_tolerance: 0.1
 
     FollowPath:
       # OREGON: o robo real usava CustomRegulatedPurePursuitController.
@@ -220,12 +222,12 @@ local_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 3.0
+          raytrace_max_range: 8.0
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5
           obstacle_min_range: 0.0
           inf_is_valid: true
-          # OREGON: usava raytrace_max_range: 8.0 no local_costmap.
+          # OREGON: valor importado do nav_routegraph.yaml.
 
       # OREGON: camada 3D usada com ToF/ground_segmentation.
       # Requer spatio_temporal_voxel_layer e PointCloud2; nao ativar no sim atual.
@@ -256,8 +258,8 @@ global_costmap:
 
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       # OREGON: usava filtro de velocidade no global_costmap.
-      # Para ativar, tambem precisa iniciar speed_filter_mask_server e speed_costmap_filter_info_server.
-      # filters: ["speed_filter"]
+      # O nav.launch.py inicia os servidores quando speed_filter:=True.
+      filters: ["speed_filter"]
 
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -269,12 +271,12 @@ global_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 3.0
+          raytrace_max_range: 5.0
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5
           obstacle_min_range: 0.0
           inf_is_valid: true
-          # OREGON: usava raytrace_max_range: 5.0 no global_costmap.
+          # OREGON: valor importado do nav_routegraph.yaml.
 
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -288,11 +290,11 @@ global_costmap:
         inflation_radius: 0.3
 
       # OREGON: plugin de filtro de velocidade.
-      # speed_filter:
-      #   plugin: "nav2_costmap_2d::SpeedFilter"
-      #   enabled: True
-      #   filter_info_topic: "/speed_costmap_filter_info"
-      #   speed_limit_topic: "/speed_limit"
+      speed_filter:
+        plugin: "nav2_costmap_2d::SpeedFilter"
+        enabled: True
+        filter_info_topic: "/speed_costmap_filter_info"
+        speed_limit_topic: "/speed_limit"
 
       always_send_full_costmap: True
 
@@ -311,19 +313,20 @@ planner_server:
 smoother_server:
   ros__parameters:
     use_sim_time: True
-    smoother_plugins: ["simple_smoother"]
-    simple_smoother:
-      plugin: "nav2_smoother::SimpleSmoother"
-      tolerance: 1.0e-10
-      max_its: 1000
-      do_refinement: True
+    # OREGON: suavizador usado pela BT de rota por grafo.
+    smoother_plugins: ["savitzky_golay_smoother"]
+    savitzky_golay_smoother:
+      plugin: "nav2_smoother::SavitzkyGolaySmoother"
+      do_refinement: true
+      keep_start_orientation: true
 
-    # OREGON: alternativa usada no nav_routegraph.yaml.
-    # smoother_plugins: ["savitzky_golay_smoother"]
-    # savitzky_golay_smoother:
-    #   plugin: "nav2_smoother::SavitzkyGolaySmoother"
-    #   do_refinement: true
-    #   keep_start_orientation: true
+    # SIM BOT: fallback anterior.
+    # smoother_plugins: ["simple_smoother"]
+    # simple_smoother:
+    #   plugin: "nav2_smoother::SimpleSmoother"
+    #   tolerance: 1.0e-10
+    #   max_its: 1000
+    #   do_refinement: True
 
 behavior_server:
   ros__parameters:
@@ -384,45 +387,48 @@ velocity_smoother:
 
     # OREGON: limites importados do nav_routegraph.yaml para teste.
 
-# OREGON: route_server usado com grafo de rotas.
-# O nav.launch.py atual do simulador nao inicia route_server, entao isto fica
-# somente como referencia ate existir um launch adaptado para rotas.
-# route_server:
-#   ros__parameters:
-#     graph_filepath: "$(find-pkg-share sim_bot)/graphs/oregon.json"
-#     boundary_radius_to_achieve_node: 1.0
-#     radius_to_achieve_node: 2.0
-#     smooth_corners: true
-#     operations: ["AdjustSpeedLimit", "ReroutingService", "CollisionMonitor"]
-#     ReroutingService:
-#       plugin: "nav2_route::ReroutingService"
-#     AdjustSpeedLimit:
-#       plugin: "nav2_route::AdjustSpeedLimit"
-#     CollisionMonitor:
-#       plugin: "nav2_route::CollisionMonitor"
-#       max_collision_dist: 3.0
-#     edge_cost_functions: ["DistanceScorer", "CostmapScorer"]
-#     DistanceScorer:
-#       plugin: "nav2_route::DistanceScorer"
-#     CostmapScorer:
-#       plugin: "nav2_route::CostmapScorer"
-#       invalid_on_collision: false
+route_server:
+  ros__parameters:
+    use_sim_time: True
+    # OREGON: aceleradoras.json foi copiado do nav2_route/graphs para teste no simulador.
+    graph_filepath: "$(find-pkg-share sim_bot)/graphs/aceleradoras.json"
+    boundary_radius_to_achieve_node: 1.0
+    radius_to_achieve_node: 2.0
+    smooth_corners: true
+    # OREGON: operacoes usadas pelo route_server.
+    operations: ["AdjustSpeedLimit", "ReroutingService", "CollisionMonitor"]
+    ReroutingService:
+      plugin: "nav2_route::ReroutingService"
+    AdjustSpeedLimit:
+      plugin: "nav2_route::AdjustSpeedLimit"
+    CollisionMonitor:
+      plugin: "nav2_route::CollisionMonitor"
+      max_collision_dist: 3.0
+    # OREGON: usa DistanceScorer + CostmapScorer. O CostmapScorer fica ativo
+    # para pontuar custo do global_costmap, mas sem invalidar a rota.
+    edge_cost_functions: ["DistanceScorer", "CostmapScorer"]
+    DistanceScorer:
+      plugin: "nav2_route::DistanceScorer"
+    CostmapScorer:
+      plugin: "nav2_route::CostmapScorer"
+      # OREGON: false. Com true, o sim retornou NO_VALID_ROUTE porque o
+      # costmap invalidava a rota completa.
+      invalid_on_collision: false
 
-# OREGON: servidores do filtro de velocidade.
-# Tambem precisam ser lancados por um launch especifico antes de ativar
-# filters: ["speed_filter"] no global_costmap.
-# speed_filter_mask_server:
-#   ros__parameters:
-#     topic_name: "/speed_filter_mask"
-#     yaml_filename: "$(find-pkg-share sim_bot)/maps/oregon_speed_mask.yaml"
-#
-# speed_costmap_filter_info_server:
-#   ros__parameters:
-#     type: 1
-#     filter_info_topic: "/speed_costmap_filter_info"
-#     mask_topic: "/speed_filter_mask"
-#     base: 100.0
-#     multiplier: -1.0
+speed_filter_mask_server:
+  ros__parameters:
+    use_sim_time: True
+    topic_name: "/speed_filter_mask"
+    yaml_filename: "$(find-pkg-share sim_bot)/config_map/aceleradora/aceleradora_speed_mask.yaml"
+
+speed_costmap_filter_info_server:
+  ros__parameters:
+    use_sim_time: True
+    type: 1
+    filter_info_topic: "/speed_costmap_filter_info"
+    mask_topic: "/speed_filter_mask"
+    base: 100.0
+    multiplier: -1.0
 
 # OREGON: collision_monitor usado no robo real.
 # O nav.launch.py atual nao inicia este no. Se for usar, precisa adicionar o no

@@ -18,6 +18,8 @@ def generate_launch_description():
     autostart = LaunchConfiguration('autostart')
     params_file = LaunchConfiguration('params_file')
     map_yaml = LaunchConfiguration('map')
+    use_route = LaunchConfiguration('route')
+    use_speed_filter = LaunchConfiguration('speed_filter')
     log_level = LaunchConfiguration('log_level')
 
     lifecycle_nodes = ['controller_server',
@@ -29,6 +31,8 @@ def generate_launch_description():
                        'velocity_smoother'
     ]
     localization_nodes = ['map_server', 'amcl']
+    route_nodes = ['route_server']
+    speed_filter_nodes = ['speed_filter_mask_server', 'speed_costmap_filter_info_server']
     use_map = PythonExpression(["'", map_yaml, "' != ''"])
 
     remappings = [('/tf', 'tf'),
@@ -69,6 +73,16 @@ def generate_launch_description():
         'map',
         default_value='',
         description='Full path to the map YAML file. If set, starts map_server and AMCL.')
+
+    declare_route_cmd = DeclareLaunchArgument(
+        'route',
+        default_value='false',
+        description='Start nav2_route route_server if true')
+
+    declare_speed_filter_cmd = DeclareLaunchArgument(
+        'speed_filter',
+        default_value='false',
+        description='Start Nav2 speed filter mask and filter info servers if true')
 
     declare_autostart_cmd = DeclareLaunchArgument(
         'autostart', default_value='true',
@@ -181,6 +195,60 @@ def generate_launch_description():
         ]
     )
 
+    route = GroupAction(
+        condition=IfCondition(use_route),
+        actions=[
+            Node(
+                package='nav2_route',
+                executable='route_server',
+                name='route_server',
+                output='screen',
+                parameters=[configured_params],
+                arguments=['--ros-args', '--log-level', log_level],
+                remappings=remappings),
+            Node(
+                package='nav2_lifecycle_manager',
+                executable='lifecycle_manager',
+                name='lifecycle_manager_route',
+                output='screen',
+                arguments=['--ros-args', '--log-level', log_level],
+                parameters=[{'use_sim_time': use_sim_time},
+                            {'autostart': autostart},
+                            {'node_names': route_nodes}]),
+        ]
+    )
+
+    speed_filter = GroupAction(
+        condition=IfCondition(use_speed_filter),
+        actions=[
+            Node(
+                package='nav2_map_server',
+                executable='map_server',
+                name='speed_filter_mask_server',
+                output='screen',
+                parameters=[configured_params],
+                arguments=['--ros-args', '--log-level', log_level],
+                remappings=remappings),
+            Node(
+                package='nav2_map_server',
+                executable='costmap_filter_info_server',
+                name='speed_costmap_filter_info_server',
+                output='screen',
+                parameters=[configured_params],
+                arguments=['--ros-args', '--log-level', log_level],
+                remappings=remappings),
+            Node(
+                package='nav2_lifecycle_manager',
+                executable='lifecycle_manager',
+                name='lifecycle_manager_speed_filter',
+                output='screen',
+                arguments=['--ros-args', '--log-level', log_level],
+                parameters=[{'use_sim_time': use_sim_time},
+                            {'autostart': autostart},
+                            {'node_names': speed_filter_nodes}]),
+        ]
+    )
+
     # Create the launch description and populate
     ld = LaunchDescription()
 
@@ -192,11 +260,15 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_map_cmd)
+    ld.add_action(declare_route_cmd)
+    ld.add_action(declare_speed_filter_cmd)
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_log_level_cmd)
 
     # Add the actions to launch all of the navigation nodes
     ld.add_action(localization)
+    ld.add_action(speed_filter)
     ld.add_action(navigation)
+    ld.add_action(route)
 
     return ld
