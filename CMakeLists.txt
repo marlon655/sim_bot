@@ -12,8 +12,20 @@ find_package(ament_cmake REQUIRED)
 
 # Install files
 install(
-  DIRECTORY config config_map description launch meshes rviz worlds models
+  DIRECTORY btree config config_map description graphs launch meshes rviz worlds models
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  PROGRAMS scripts/graph_visualizer.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME graph_visualizer
+)
+
+install(
+  PROGRAMS scripts/route_to_poses.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME route_to_poses
 )
 
 ament_package()

@@ -215,3 +215,308 @@ ros2 node list
 7. Testar route_server
 8. Testar speed_filter ou ToF apenas no final
 ```
+
+## Sequencia Atual Para Aproximar Da Oregon
+
+Depois dos testes iniciais, a meta passou a ser deixar o simulador mais fiel ao
+modelo da Oregon, mas em um formato generico para reaproveitar com outros
+robos.
+
+A ideia nao e copiar caminhos absolutos, nomes especificos ou dependencias do
+NUC. O objetivo e manter a mesma arquitetura:
+
+```text
+robo simulado
+  -> Nav2
+  -> route_server
+  -> grafo
+  -> speed_filter
+  -> camada tipo nav_hub / Behavior Tree
+```
+
+## Estado Atual Da Migracao
+
+Ja foi validado no simulador:
+
+```text
+palmares_bot no Gazebo
+mapa aceleradora com AMCL
+oregon_nav_params.yaml
+controller Regulated Pure Pursuit padrao
+footprint do palmares
+route_server com graph aceleradoras.json
+route_to_poses chamando /compute_route e /follow_path
+grafo sequencial e limpo
+speed_filter ativo
+mascara de velocidade alinhada ao mapa
+area de reducao de velocidade na curva id5 -> id6 -> id7
+Behavior Tree de rota por grafo adaptada para o sim_bot
+2D Goal Pose do RViz seguindo o grafo
+visualizacao do grafo com /route_graph_markers
+```
+
+O `route_to_poses.py` continua sendo uma ponte de teste. Ele prova que o grafo
+e o controller funcionam de forma direta.
+
+A aproximacao mais fiel da Oregon agora passa pela BT:
+
+```text
+btree/nav_on_route_graph_sim.xml
+```
+
+Ela permite que o `2D Goal Pose` do RViz chame o `route_server`, use o grafo e
+depois envie o caminho suavizado para o controller.
+
+O fluxo ja foi validado:
+
+```text
+RViz 2D Goal Pose
+  -> bt_navigator
+  -> ComputeRoute
+  -> route_server
+  -> graphs/aceleradoras.json
+  -> SmoothPath
+  -> FollowPath
+```
+
+## Arquitetura Desejada
+
+Formato desejado para ficar mais proximo da Oregon:
+
+```text
+RViz / cliente / operador
+  -> camada de decisao de rota
+  -> route_server
+  -> rota no grafo
+  -> Nav2 / controller
+  -> speed_filter
+  -> /cmd_vel
+```
+
+Na Oregon, essa camada de decisao provavelmente envolve:
+
+```text
+nav_hub
+main_route_graph
+Behavior Tree
+btree/nav_on_route_graph_oregon.xml
+```
+
+No simulador, essa camada deve ser adaptada para algo generico, evitando
+dependencias diretas de nomes como `oregon`, caminhos em `/home/ubuntu` ou
+pacotes que nao fazem parte do `sim_bot`.
+
+## Proximos Passos Para Um Modelo Generico
+
+### 1. Mapear A Arquitetura Da Oregon
+
+Objetivo:
+
+```text
+descobrir quem substitui o route_to_poses.py na Oregon
+```
+
+Procurar e documentar:
+
+```text
+nav_hub
+main_route_graph
+btree/nav_on_route_graph_oregon.xml
+actions usadas
+services usados
+topicos de goal
+como chama /compute_route
+como entrega a rota para o Nav2
+como trata falha e replanejamento
+```
+
+Resultado esperado:
+
+```text
+lista de arquivos importantes da Oregon
+dependencias obrigatorias
+dependencias que podem ser removidas
+fluxo real entre goal, grafo e Nav2
+```
+
+### 2. Separar O Que E Generico Do Que E Especifico Do Robo
+
+Generico:
+
+```text
+route_server
+grafo .json
+speed_filter
+mascara de velocidade
+costmap filters
+cliente que transforma destino em rota
+Behavior Tree de navegacao por grafo
+```
+
+Especifico do robo:
+
+```text
+URDF/Xacro
+footprint
+frames base_link/base_footprint
+topicos de sensores
+limites de velocidade
+controller tuning
+mapa e mascara usados no ambiente
+```
+
+O modelo final deve permitir trocar o robo mantendo a estrutura.
+
+### 3. Evoluir O route_to_poses Para Um Node Mais Generico
+
+Nome possivel:
+
+```text
+route_graph_navigator
+sim_route_graph_navigator
+```
+
+Responsabilidades:
+
+```text
+receber um destino por ID ou pose
+encontrar o no mais adequado do grafo
+chamar /compute_route
+enviar o path para /follow_path ou para uma action Nav2 equivalente
+monitorar resultado
+publicar logs claros
+tratar falha simples
+permitir reuso em outros robos
+```
+
+Esse node deve substituir o uso manual de:
+
+```bash
+ros2 run sim_bot route_to_poses --ros-args ...
+```
+
+### 4. Integrar Com Entrada De Goal
+
+Opcoes de entrada:
+
+```text
+goal por ID do grafo
+goal por pose clicada no RViz
+goal por topico custom
+goal por service/action propria
+```
+
+Primeiro passo recomendado:
+
+```text
+manter goal por ID
+depois adicionar conversao de clique no RViz para no mais proximo do grafo
+```
+
+Isso deixa o uso mais pratico sem trazer toda a complexidade do `nav_hub` de
+uma vez.
+
+### 5. Adaptar Behavior Tree
+
+Depois que grafo, route_server e speed_filter foram validados, foi criada uma
+BT semelhante a:
+
+```text
+nav_on_route_graph_oregon.xml
+```
+
+Arquivo no simulador:
+
+```text
+btree/nav_on_route_graph_sim.xml
+```
+
+Objetivo da BT:
+
+```text
+orquestrar planejamento por grafo
+acionar navegacao
+reagir a falhas
+permitir replanejamento
+aproximar o simulador da arquitetura real
+```
+
+Fluxo desejado:
+
+```text
+RViz 2D Goal Pose
+  -> bt_navigator
+  -> ComputeRoute
+  -> route_server
+  -> grafo
+  -> SmoothPath
+  -> FollowPath
+```
+
+Esse modo exige:
+
+```text
+route:=True
+speed_filter:=True, quando o YAML estiver com filters: ["speed_filter"]
+```
+
+O `route_to_poses.py` permanece como ferramenta de diagnostico para testar
+`/compute_route` e `/follow_path` sem depender do RViz.
+
+### 6. Remover Caminhos Absolutos E Nomes Fixos
+
+Todo arquivo importado da Oregon precisa ser adaptado para usar:
+
+```text
+$(find-pkg-share sim_bot)
+LaunchConfiguration
+parametros YAML
+nomes genericos
+```
+
+Evitar:
+
+```text
+/home/ubuntu/...
+/home/ros_estudo/Downloads/...
+nomes fixos de robo dentro de configs genericas
+```
+
+### 7. Documentar Cada Camada Validada
+
+Manter dois documentos:
+
+```text
+SIM_BOT_TO_OREGON.md
+OREGON_INTEGRATION.md
+```
+
+Uso recomendado:
+
+```text
+SIM_BOT_TO_OREGON.md      roteiro geral e estrategia
+OREGON_INTEGRATION.md     detalhes tecnicos do que foi implementado
+```
+
+Quando uma etapa funcionar no simulador:
+
+```text
+documentar comando de teste
+documentar arquivos alterados
+documentar topicos/nos esperados
+documentar diferencas em relacao a Oregon
+documentar o que ficou generico para outros robos
+```
+
+## Ordem Recomendada A Partir De Agora
+
+```text
+1. Manter o baseline atual funcionando como referencia
+2. Comparar a BT adaptada com nav_on_route_graph_oregon.xml
+3. Remover diferencas que nao forem necessarias no simulador
+4. Manter route_to_poses.py e graph_visualizer como diagnostico
+5. Parametrizar grafo/mapa/mascara/BT para virar modelo generico
+6. Identificar dependencias ausentes do nav_hub/main_route_graph
+7. Separar parametros genericos dos parametros especificos do Palmares
+8. Manter speed_filter e grafo como recursos genericos configuraveis
+```

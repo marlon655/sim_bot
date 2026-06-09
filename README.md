@@ -183,6 +183,123 @@ No RViz, primeiro use `2D Pose Estimate` para informar a pose inicial do robo no
 
 O Nav2 publica comandos diretamente em `/cmd_vel`, que e o topico usado pelo bridge ROS 2 <-> Gazebo. Os parametros `enable_stamped_cmd_vel: false` em `controller_server` e `behavior_server` mantem esse topico como `geometry_msgs/msg/Twist`, compativel com o Gazebo Sim.
 
+## Fluxo Palmares/Oregon
+
+Este fluxo usa o `palmares_bot`, mapa pronto, Nav2, route server, grafo de rotas
+e filtro de velocidade. Ele e o fluxo principal para testar a adaptacao baseada
+na arquitetura da Oregon.
+
+### 1. Inicializar Simulacao
+
+```bash
+cd ~/sim_ws
+source install/setup.bash
+
+ros2 launch sim_bot palmares_bot.launch.py \
+  world:=$PWD/src/sim_bot/worlds/aceleradora.world \
+  slam:=False \
+  nav:=True \
+  rviz:=True \
+  joy:=False \
+  route:=True \
+  speed_filter:=True \
+  map:=$PWD/src/sim_bot/config_map/aceleradora/aceleradora.yaml \
+  params_file:=$PWD/src/sim_bot/config/oregon_nav_params.yaml
+```
+
+Parametros usados:
+
+```text
+world:=...          Mundo Gazebo usado na simulacao.
+slam:=False         Desliga SLAM, pois este fluxo usa mapa pronto.
+nav:=True           Sobe a pilha Nav2.
+rviz:=True          Abre o RViz.
+joy:=False          Desliga teleoperacao por joystick para evitar conflito com Nav2.
+route:=True         Sobe o nav2_route/route_server para calcular rotas pelo grafo.
+speed_filter:=True  Sobe os servidores do filtro de velocidade.
+map:=...            Mapa YAML usado pelo map_server e AMCL.
+params_file:=...    Parametros Nav2/Oregon usados neste teste.
+```
+
+Com esse launch, o fluxo esperado ao clicar em `2D Goal Pose` no RViz e:
+
+```text
+RViz 2D Goal Pose
+  -> bt_navigator
+  -> btree/nav_on_route_graph_sim.xml
+  -> ComputeRoute
+  -> route_server
+  -> graphs/aceleradoras.json
+  -> SmoothPath
+  -> FollowPath
+  -> /cmd_vel
+```
+
+### 2. Visualizar O Grafo No RViz
+
+Em outro terminal:
+
+```bash
+cd ~/sim_ws
+source install/setup.bash
+
+ros2 run sim_bot graph_visualizer
+```
+
+No RViz, adicione:
+
+```text
+Add -> By topic -> /route_graph_markers -> MarkerArray
+```
+
+O visualizador mostra:
+
+```text
+linhas azuis: arestas do grafo
+esferas amarelas: nos do grafo
+texto branco: ID dos nos
+```
+
+### 3. Posicionar O Robo No No 1
+
+Para testar `route_to_poses` com `start_id:=1`, primeiro envie o robo para a
+posicao do no 1:
+
+```bash
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+"{pose: {header: {frame_id: 'map'}, pose: {position: {x: 17.41612434387207, y: 18.228958129882812, z: 0.0}, orientation: {w: 1.0}}}}"
+```
+
+Esse passo e util quando o teste usa IDs fixos no grafo e voce quer garantir
+que a posicao real do robo esta coerente com o `start_id`.
+
+### 4. Testar Rota Por ID
+
+Depois que o robo estiver proximo do no 1:
+
+```bash
+ros2 run sim_bot route_to_poses --ros-args \
+  -p use_start:=False \
+  -p start_id:=1 \
+  -p goal_id:=17
+```
+
+Esse comando chama `/compute_route` usando IDs do grafo e envia o caminho
+retornado para `/follow_path`.
+
+Arquivos principais deste fluxo:
+
+```text
+launch/palmares_bot.launch.py
+launch/nav.launch.py
+config/oregon_nav_params.yaml
+btree/nav_on_route_graph_sim.xml
+graphs/aceleradoras.json
+scripts/route_to_poses.py
+scripts/graph_visualizer.py
+config_map/aceleradora/aceleradora_speed_mask.yaml
+```
+
 ## Observacoes
 
 - Na primeira execucao, o Gazebo pode baixar modelos do Gazebo Fuel usados no mundo `test.world`.
