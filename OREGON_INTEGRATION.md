@@ -1427,6 +1427,70 @@ suavizar caminho,
 seguir com FollowPath.
 ```
 
+### Ajuste Da BT Para Ficar Mais Proxima Da Oregon
+
+A BT do simulador foi ajustada para seguir a estrutura da
+`nav_on_route_graph_oregon.xml`.
+
+Estrutura atual:
+
+```text
+NavigateWithRoutes
+  -> ControllerSelector
+  -> PlannerSelector
+  -> PlanningRecovery
+      -> ComputeFullRoute
+          -> ComputeRoute
+          -> FirstMileCheck
+          -> LastMileCheck
+          -> EnsureGoalOnPath
+          -> SmoothPath
+  -> FollowPath
+```
+
+Isso substituiu a versao anterior que usava:
+
+```text
+NavigateRecovery
+PipelineSequence
+RateController
+IsPathValid
+FollowRoutePath recovery separado
+```
+
+A BT atual ficou mais proxima da Oregon em:
+
+```text
+nome da sequencia principal: NavigateWithRoutes
+RecoveryNode: PlanningRecovery com number_of_retries=9999
+ComputeFullRoute como sequencia principal de planejamento
+EnsureGoalOnPath explicito
+SmoothPath usando final_path
+FollowPath direto depois do planejamento
+```
+
+Diferenças mantidas por causa do simulador:
+
+```text
+GetCurrentPose usa global_frame="map"
+GetCurrentPose usa robot_base_frame="base_link"
+ArePosesNear usa global_frame="map"
+```
+
+Na Oregon, o frame base esperado era `base_footprint`. No `palmares_bot` atual,
+o frame de navegação validado e `base_link`, por isso essa diferença foi
+mantida.
+
+Proximo teste necessario depois dessa alteracao:
+
+```text
+subir palmares_bot.launch.py com route:=True e speed_filter:=True
+abrir RViz
+rodar graph_visualizer
+enviar 2D Goal Pose
+confirmar se o robo continua seguindo o grafo
+```
+
 ### CostmapScorer
 
 Foi testado:

@@ -279,6 +279,24 @@ RViz 2D Goal Pose
   -> FollowPath
 ```
 
+A BT foi ajustada para ficar mais parecida com a Oregon. A estrutura atual usa:
+
+```text
+NavigateWithRoutes
+PlanningRecovery
+ComputeFullRoute
+EnsureGoalOnPath
+SmoothPath
+FollowPath
+```
+
+As diferenças mantidas sao especificas do simulador:
+
+```text
+global_frame=map
+robot_base_frame=base_link
+```
+
 ## Arquitetura Desejada
 
 Formato desejado para ficar mais proximo da Oregon:
@@ -512,8 +530,8 @@ documentar o que ficou generico para outros robos
 
 ```text
 1. Manter o baseline atual funcionando como referencia
-2. Comparar a BT adaptada com nav_on_route_graph_oregon.xml
-3. Remover diferencas que nao forem necessarias no simulador
+2. Validar novamente a BT ajustada com 2D Goal Pose no RViz
+3. Comparar diferencas restantes com nav_on_route_graph_oregon.xml
 4. Manter route_to_poses.py e graph_visualizer como diagnostico
 5. Parametrizar grafo/mapa/mascara/BT para virar modelo generico
 6. Identificar dependencias ausentes do nav_hub/main_route_graph
