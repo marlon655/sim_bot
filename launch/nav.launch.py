@@ -30,7 +30,7 @@ def generate_launch_description():
                        'behavior_server',
                        'bt_navigator',
                        'waypoint_follower',
-                       'velocity_smoother'
+                       'velocity_smoother',
     ]
 
     remappings = [('/tf', 'tf'),

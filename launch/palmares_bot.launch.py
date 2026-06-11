@@ -5,13 +5,27 @@ from launch.conditions import IfCondition
 from ament_index_python.packages import get_package_share_directory
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, GroupAction
+from launch.actions import (
+    IncludeLaunchDescription, DeclareLaunchArgument, GroupAction,
+    SetEnvironmentVariable, TimerAction)
 
 
 def generate_launch_description():
 
     # Package name
     package_name = 'sim_bot'
+
+    # ── Make Gazebo aware of the custom charging_dock model ───────────────
+    # Append our models/ directory to GZ_SIM_RESOURCE_PATH so that
+    # <include><uri>model://charging_dock</uri></include> in test.world
+    # resolves correctly.  We prepend any pre-existing path.
+    _models_path = os.path.join(
+        get_package_share_directory(package_name), 'models')
+    _existing_gz_path = os.environ.get('GZ_SIM_RESOURCE_PATH', '')
+    _gz_resource_path = (_existing_gz_path + ':' + _models_path
+                         if _existing_gz_path else _models_path)
+    set_gz_resource_path = SetEnvironmentVariable(
+        'GZ_SIM_RESOURCE_PATH', _gz_resource_path)
 
     # Launch configurations
     read_world = LaunchConfiguration('world')
@@ -49,6 +63,12 @@ def generate_launch_description():
     declare_nav = DeclareLaunchArgument(
         name='nav', default_value='True',
         description='Enable Nav2 navigation stack')
+
+    declare_dock = DeclareLaunchArgument(
+        name='dock', default_value='True',
+        description='Enable ArUco/LiDAR docking system')
+
+    read_dock = LaunchConfiguration('dock')
 
     # ── Robot State Publisher ──────────────────────────────────────────────
     urdf_path = os.path.join(
@@ -122,6 +142,27 @@ def generate_launch_description():
         arguments=['--ros-args', '-p', f'config_file:={bridge_params}']
     )
 
+    # ── odom → TF relay (clean 30 Hz TF, avoids Gazebo "jump back in time") ──
+    odom_to_tf = Node(
+        package='sim_bot',
+        executable='odom_to_tf.py',
+        name='odom_to_tf',
+        output='screen',
+        parameters=[{'use_sim_time': True}]
+    )
+
+    # ── joint_state_publisher (monotonic sim-time stamps, no Gazebo jitter) ──
+    # Replaces the gz_bridge joint_states bridge. Publishes zero-position wheel
+    # joints at 10 Hz using sim clock so robot_state_publisher never sees
+    # "Moved backwards in time" and never flushes the TF buffer.
+    joint_state_pub = Node(
+        package='joint_state_publisher',
+        executable='joint_state_publisher',
+        name='joint_state_publisher',
+        parameters=[{'use_sim_time': True}],
+        output='screen',
+    )
+
     # ── RViz ──────────────────────────────────────────────────────────────
     rviz_config_file = os.path.join(
         get_package_share_directory(package_name), 'rviz', 'bot.rviz')
@@ -143,28 +184,57 @@ def generate_launch_description():
     )
 
     # ── SLAM (optional) ───────────────────────────────────────────────────
-    slam_node = GroupAction(
-        condition=IfCondition(read_slam),
-        actions=[IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([os.path.join(
-                get_package_share_directory(package_name), 'launch', 'slam.launch.py'
-            )]),
-            launch_arguments={'use_sim_time': 'true'}.items())]
+    # Delay 5 s so Gazebo is fully running and odom_to_tf is publishing TF
+    # before slam_toolbox tries to process its first scan.  Without this delay
+    # the very first scan may arrive before odom_to_tf has published any TF,
+    # causing tf2::NoDataForExtrapolationException on startup.
+    slam_node = TimerAction(
+        period=5.0,
+        actions=[GroupAction(
+            condition=IfCondition(read_slam),
+            actions=[IncludeLaunchDescription(
+                PythonLaunchDescriptionSource([os.path.join(
+                    get_package_share_directory(package_name), 'launch', 'slam.launch.py'
+                )]),
+                launch_arguments={'use_sim_time': 'true'}.items())]
+        )]
     )
 
     # ── Nav2 (optional) ───────────────────────────────────────────────────
     nav_params = os.path.join(
         get_package_share_directory(package_name), 'config', 'nav_params.yaml')
-    nav_node = GroupAction(
-        condition=IfCondition(read_nav),
-        actions=[IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([os.path.join(
-                get_package_share_directory(package_name), 'launch', 'nav.launch.py'
-            )]),
-            launch_arguments={'use_sim_time': 'true', 'params_file': nav_params}.items())]
+    # Delay Nav2 by 20 seconds so that Gazebo has time to start publishing
+    # /scan, SLAM can receive it and begin publishing the map->odom TF,
+    # before the global_costmap tries to look up that transform.
+    nav_node = TimerAction(
+        period=20.0,
+        actions=[GroupAction(
+            condition=IfCondition(read_nav),
+            actions=[IncludeLaunchDescription(
+                PythonLaunchDescriptionSource([os.path.join(
+                    get_package_share_directory(package_name), 'launch', 'nav.launch.py'
+                )]),
+                launch_arguments={'use_sim_time': 'true', 'params_file': nav_params}.items())]
+        )]
+    )
+
+    # ── Docking system (optional) ─────────────────────────────────────────
+    dock_node = TimerAction(
+        period=25.0,
+        actions=[GroupAction(
+            condition=IfCondition(read_dock),
+            actions=[IncludeLaunchDescription(
+                PythonLaunchDescriptionSource([os.path.join(
+                    get_package_share_directory(package_name), 'launch', 'docking.launch.py'
+                )])
+            )]
+        )]
     )
 
     return LaunchDescription([
+        # Environment
+        set_gz_resource_path,
+
         # Declare launch arguments
         declare_headless,
         declare_rviz,
@@ -172,6 +242,7 @@ def generate_launch_description():
         declare_world,
         declare_slam,
         declare_nav,
+        declare_dock,
 
         # Launch nodes
         rviz2,
@@ -181,7 +252,10 @@ def generate_launch_description():
         gazebo_server,
         gazebo_client,
         ros_gz_bridge,
+        odom_to_tf,
+        joint_state_pub,
         spawn_palmares_bot,
         slam_node,
         nav_node,
+        dock_node,
     ])

@@ -5,12 +5,12 @@
   gz_type_name: "gz.msgs.Clock"
   direction: GZ_TO_ROS
 
-# gz topic published by JointState plugin
-- ros_topic_name: "joint_states"
-  gz_topic_name: "joint_states"
-  ros_type_name: "sensor_msgs/msg/JointState"
-  gz_type_name: "gz.msgs.Model"
-  direction: GZ_TO_ROS
+# joint_states NOT bridged from Gazebo: the JointStatePublisher plugin sends
+# timestamps at physics rate (non-monotonic), causing robot_state_publisher to
+# detect "Moved backwards in time" and re-publish wheel TF with old timestamps.
+# This flushes all nodes' TF buffers, breaking the laser_frame->odom lookup.
+# Instead, joint_state_publisher (ROS2 package) publishes zero-position joints
+# at 10 Hz using sim clock (monotonic) → robot_state_publisher is happy.
 
 # gz topic published by DiffDrive plugin
 - ros_topic_name: "odom"
@@ -19,12 +19,10 @@
   gz_type_name: "gz.msgs.Odometry"
   direction: GZ_TO_ROS
 
-# gz topic published by DiffDrive plugin
-- ros_topic_name: "tf"
-  gz_topic_name: "tf"
-  ros_type_name: "tf2_msgs/msg/TFMessage"
-  gz_type_name: "gz.msgs.Pose_V"
-  direction: GZ_TO_ROS
+# TF NOT bridged from Gazebo: the DiffDrive plugin publishes Pose_V at physics
+# rate with non-monotonic timestamps, causing endless "jump back in time" errors
+# that prevent SLAM from processing scans. Instead, odom_to_tf.py subscribes to
+# /odom (30 Hz, monotonic) and publishes the odom->base_footprint TF cleanly.
 
 # gz topic subscribed to by DiffDrive plugin
 - ros_topic_name: "cmd_vel"

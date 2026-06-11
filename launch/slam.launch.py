@@ -36,10 +36,27 @@ def generate_launch_description():
         parameters=[params_file, {'use_sim_time': use_sim_time}]
     )
 
+    # Dedicated lifecycle manager for slam_toolbox.
+    # bond_timeout=0 prevents the manager from killing slam_toolbox if
+    # the bond heartbeat is slow during heavy Gazebo startup.
+    slam_lifecycle_manager = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_slam',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'autostart': True,
+            'node_names': ['slam_toolbox'],
+            'bond_timeout': 0.0,
+        }]
+    )
+
     # Launch!
     ld = LaunchDescription()
     ld.add_action(declare_use_sim_time)
     ld.add_action(declare_params_file)
     ld.add_action(slam_node)
+    ld.add_action(slam_lifecycle_manager)
 
     return ld

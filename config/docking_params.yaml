@@ -1,0 +1,71 @@
+# ══════════════════════════════════════════════════════════════════════════
+#  opennav_docking – DockingServer + SimpleChargingDock parameters
+#  for Palmares robot docking to base_carregamento via ArUco ID=771 + LiDAR
+# ══════════════════════════════════════════════════════════════════════════
+
+docking_server:
+  ros__parameters:
+    # ── Server ──────────────────────────────────────────────────────────
+    controller_frequency: 50.0          # Hz – vision-control loop
+    initial_perception_timeout: 8.0     # s  – wait for first dock detection
+    wait_charge_timeout: 5.0            # s  – wait for charging after dock
+    dock_approach_timeout: 45.0         # s  – max time for approach loop
+    undock_linear_tolerance: 0.05       # m
+    undock_angular_tolerance: 0.05      # rad
+    max_retries: 3
+    base_frame: base_link
+    fixed_frame: odom
+    dock_backwards: false
+    dock_prestaging_tolerance: 1.5      # m – skip nav if already within this
+
+    # ── Graceful controller ──────────────────────────────────────────────
+    controller:
+      k_phi: 3.0
+      k_delta: 2.0
+      beta: 0.4
+      lambda: 2.0
+      v_linear_min: 0.06
+      v_linear_max: 0.18
+      v_angular_max: 0.6
+      slowdown_radius: 0.4
+      use_collision_detection: false    # disable during final dock approach
+
+    # ── Dock plugin registration ─────────────────────────────────────────
+    dock_plugins: ['charging_dock']
+
+    charging_dock:
+      plugin: 'opennav_docking::SimpleChargingDock'
+
+      # Use our dock_pose_estimator node (ArUco → LiDAR fusion)
+      use_external_detection_pose: true
+      external_detection_timeout: 2.0   # s – fallback if estimator stalls
+
+      # The estimator already publishes the correct robot approach pose
+      # (marker_pos - STOP_DISTANCE in approach direction), so zero offsets.
+      external_detection_translation_x: 0.0
+      external_detection_translation_y: 0.0
+      external_detection_rotation_yaw: 0.0
+      external_detection_rotation_pitch: 0.0
+      external_detection_rotation_roll: 0.0
+      filter_coef: 0.1                  # low-pass filter on detected pose
+
+      # Stop when robot center is within 5 cm of the published dock pose.
+      # dock_pose_estimator offsets the target so 5 cm lands before contact.
+      docking_threshold: 0.05           # m – isDocked() = true threshold
+
+      # Staging pose: 0.7 m in front of dock entry (dock now at 2.0 m, staging ~1.3 m)
+      staging_x_offset: -0.7            # m – negative = toward robot
+      staging_yaw_offset: 0.0
+
+      # No physical battery state in simulation – use position threshold only.
+      use_battery_status: false
+      use_stall_detection: false
+
+    # ── Dock database ────────────────────────────────────────────────────
+    docks: ['base_carregamento']
+
+    base_carregamento:
+      type: 'charging_dock'
+      frame: 'map'
+      # Dock at (2.0, 0.0) directly in front of robot, yaw=0 (ArUco face points toward robot)
+      pose: [2.0, 0.0, 0.0]

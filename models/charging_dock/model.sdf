@@ -1,0 +1,86 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <model name="charging_dock">
+    <static>true</static>
+
+    <link name="base_link">
+
+      <!-- ── STL mesh body ──────────────────────────────────────────── -->
+      <!-- base_carregamento.stl is in mm; scale 0.001 converts to metres -->
+      <visual name="body_visual">
+        <geometry>
+          <mesh>
+            <uri>model://charging_dock/meshes/base_carregamento.stl</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.4 0.4 0.4 1</ambient>
+          <diffuse>0.55 0.55 0.55 1</diffuse>
+          <specular>0.1 0.1 0.1 1</specular>
+        </material>
+      </visual>
+
+      <!-- Collision box derived from STL bounding box (mm→m ×0.001):
+           X: 235–590 mm → centre 0.4125, size 0.355
+           Y: ±300 mm   → centre 0,      size 0.600
+           Z: 0–470 mm  → centre 0.235,  size 0.470 -->
+      <collision name="body_collision">
+        <pose>0.4125 0 0.235 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.355 0.600 0.470</size>
+          </box>
+        </geometry>
+      </collision>
+
+      <!-- ── ArUco marker ID=771 ─────────────────────────────────────────
+           Centred on the front face of the dock (-X side, facing the robot).
+           A thin box (2 mm thick) is used instead of <plane> so that the
+           PBR albedo texture renders correctly in Gazebo Harmonic/Fortress.
+
+           Pose in dock-model frame:
+             x = -0.202  → just in front of the collision face at x = -0.20
+             y =  0.00   → centred left-right
+             z =  0.10   → mid-height of a 200 mm tall base
+           Rotation: pitch = -π/2  → local +Z faces world -X (toward robot)
+      ──────────────────────────────────────────────────────────────── -->
+      <visual name="aruco_visual">
+        <!-- STL front face (min-X) is at local x=0.235 m, facing the robot (-X world).
+             Place ArUco 3 mm in front of that face so it is fully visible.
+             Z centre = 470/2 mm = 0.235 m (mid-height of the base). -->
+        <pose>0.232 0 0.235 0 0 0</pose>
+        <geometry>
+          <box>
+            <!-- 400 mm × 400 mm tag, 2 mm thick -->
+            <size>0.002 0.40 0.40</size>
+          </box>
+        </geometry>
+        <material>
+          <!-- The ArUco face is on the -X side of the dock, which faces AWAY
+               from the sun (direction -0.5 0.1 -0.9 = sun shines on the +X
+               face). Without self-emission the white cells appear grey in
+               shadow, breaking detection.
+               Fix: use the same ArUco PNG as emissive_map so that white
+               pixels emit their own light (value×emissive factor = 1×1 = 1)
+               and black pixels emit nothing (0×1 = 0).
+               Result: white cells → bright white, black cells → dark grey
+               regardless of external lighting → high contrast for cv2 ArUco. -->
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0 0 0 1</specular>
+          <emissive>1 1 1 1</emissive>
+          <pbr>
+            <metal>
+              <albedo_map>model://charging_dock/materials/textures/aruco_marker_771.png</albedo_map>
+              <emissive_map>model://charging_dock/materials/textures/aruco_marker_771.png</emissive_map>
+              <metalness>0.0</metalness>
+              <roughness>1.0</roughness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
+    </link>
+  </model>
+</sdf>

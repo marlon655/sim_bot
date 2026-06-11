@@ -3,7 +3,7 @@
   <world name='test'>
 
     <physics name='1ms' type='ignored'>
-      <max_step_size>0.001</max_step_size>
+      <max_step_size>0.01</max_step_size>
       <real_time_factor>1</real_time_factor>
     </physics>
 
@@ -79,40 +79,19 @@
       <self_collide>false</self_collide>
     </model>
 
+
+
+    <!-- ── Charging dock ────────────────────────────────────────────────
+         Position: 3.5 m ahead, 0.6 m offset in Y so the robot must
+         navigate and align (not a straight shot from the spawn pose).
+         The ArUco tag (ID=771) faces -X, toward the robot spawn point.
+         GZ_SIM_RESOURCE_PATH must include <pkg_share>/models for this
+         include to resolve (set in palmares_bot.launch.py).
+    ──────────────────────────────────────────────────────────────── -->
     <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
-      <name>Construction Barrel</name>
-      <pose>2.8721 1.22966 -0 0 -0 -0</pose>
-    </include>
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
-      <name>Construction Barrel_1</name>
-      <pose>1.67575 -1.00845 -0 0 -0 -0</pose>
-    </include>
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
-      <name>Construction Barrel_2</name>
-      <pose>4.19457 -0.635533 -0 0 0 0</pose>
-    </include>
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
-      <name>Construction Barrel_3</name>
-      <pose>5.34007 -3.04639 -0 0 -0 -0</pose>
-    </include>
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
-      <name>Construction Barrel_4</name>
-      <pose>2.6617 -2.7429 -0 0 -0 -0</pose>
-    </include>
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
-      <name>Construction Barrel_5</name>
-      <pose>4.07286 3.50308 -0 0 -0 -0</pose>
-    </include>
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
-      <name>Construction Barrel_6</name>
-      <pose>5.41455 1.43866 -0 0 -0 -0</pose>
+      <uri>model://charging_dock</uri>
+      <name>charging_dock</name>
+      <pose>2.0 0.0 0 0 0 0</pose>
     </include>
 
     <light name='sun' type='directional'>
@@ -133,6 +112,18 @@
         <outer_angle>0</outer_angle>
         <falloff>0</falloff>
       </spot>
+    </light>
+
+    <!-- Secondary light facing the dock's ArUco face (-X direction).
+         The main sun (direction -0.5 … ) shines on the +X (back) face,
+         leaving the ArUco face in shadow. This fill-light compensates. -->
+    <light name='dock_fill' type='directional'>
+      <pose>0 0 5 0 0 0</pose>
+      <cast_shadows>false</cast_shadows>
+      <intensity>1.2</intensity>
+      <direction>0.8 0 -0.6</direction>
+      <diffuse>1 1 1 1</diffuse>
+      <specular>0 0 0 1</specular>
     </light>
 
   </world>

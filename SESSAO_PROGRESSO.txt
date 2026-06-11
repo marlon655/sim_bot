@@ -1,0 +1,173 @@
+================================================================================
+  PROGRESSO DO PROJETO - Robot Docking Autônomo (sim_bot)
+  Atualizado em: 2026-06-11
+================================================================================
+
+OBJETIVO GERAL
+--------------
+Robot autônomo (palmares_bot) realiza docking na estação de carregamento
+(charging_dock) usando ArUco ID=771, comando: "vai pra dock"
+Stack: ROS2 Jazzy + Gazebo Harmonic + Nav2 + slam_toolbox + opennav_docking
+
+================================================================================
+O QUE ESTÁ FUNCIONANDO (CONFIRMADO)
+================================================================================
+
+[1] PILHA TF COMPLETA E ESTÁVEL
+    Cadeia: map → odom → base_footprint → base_link → chassis → laser_frame
+                                                               → camera_link → camera_link_optical
+    - odom_to_tf.py publica odom→base_footprint usando get_clock().now() (não msg.stamp)
+    - joint_state_publisher substitui bridge Gazebo de joint_states (timestamps monotônicos)
+    - Bridges TF e joint_states do Gazebo removidas do gz_bridge.yaml
+    - SLAM sobe com atraso de 5s (TimerAction) para TF já existir na primeira scan
+
+[2] ARUCO DETECTADO NA CÂMERA
+    - Problema raiz identificado e corrigido: o PNG original era DICT_ARUCO_ORIGINAL,
+      mas o detector usa DICT_4X4_1000 — dicionários diferentes, bits diferentes.
+    - PNG substituído pelo marcador correto gerado programaticamente com zona silenciosa.
+    - Arquivo: media/aruco-marker-ID=771(maior).png (conteúdo sobrescrito, 800x800px)
+    - Zona silenciosa (quiet zone) branca incluída — obrigatória para detecção.
+    - Confirmado: cv2.aruco.detectMarkers detecta ID=771 em DICT_4X4_1000.
+    - Tamanho físico do marcador (borda preta, sem quiet zone): 0.30m no painel de 0.40m.
+    - Iluminação: emissive_map + emissive 1 1 1 1 faz pixels brancos se auto-iluminarem
+      (legível mesmo com face em sombra). Fill light adicionado ao test.world.
+
+[3] dock_pose_estimator.py PUBLICANDO /detected_dock_pose
+    - Bug crítico corrigido: pt_cam.header.stamp usava msg.header.stamp (tempo Gazebo),
+      causando "Lookup would require extrapolation into the future" — o buffer TF
+      não tinha dados no instante exato da imagem → nenhuma pose publicada.
+    - Correção: pt_cam.header.stamp = rclpy.time.Time().to_msg() (usa o TF mais recente)
+    - Mesmo fix aplicado ao pt_laser no callback LiDAR.
+    - Confirmado: /detected_dock_pose publica a ~10Hz com robô de frente para a dock.
+    - Exemplo de output: x=1.916, y=0.001 em frame odom (dock em 2.0, 0.0).
+
+[4] DOCKING SERVER RECEBE POSES
+    - /docking_server subscreve /detected_dock_pose corretamente (confirmado via
+      ros2 node info /docking_server).
+    - use_external_detection_pose: true configurado no docking_params.yaml.
+
+[5] STAGING TOLERÂNCIA CORRIGIDA
+    - dock_prestaging_tolerance aumentado de 0.6m para 1.5m.
+    - Robô spawna em (0,0), staging pose fica em (1.3, 0) → distância 1.3m < 1.5m
+      → docking server pula navegação Nav2 e vai direto ao controle de aproximação.
+    - Necessário porque SLAM com robô parado só mapeia ~2.5m × 0.6m, insuficiente
+      para o planejador de rota do Nav2 alcançar a staging pose.
+
+================================================================================
+COMO INICIAR E EXECUTAR O DOCKING
+================================================================================
+
+# Terminal 1 — antes de cada sessão (mata processos anteriores):
+pkill -9 -f "ros2 launch sim_bot|gz sim|dock_pose|odom_to_tf|joint_state_pub|slam_toolbox|nav2|docking|twist_mux|robot_state" 2>/dev/null; sleep 3
+
+# Terminal 1 — sobe tudo:
+cd ~/sim_ws && source install/setup.bash && ros2 launch sim_bot palmares_bot.launch.py
+# Aguarda ~30s para SLAM (t=5s), Nav2 (t=20s) e docking server (t=25s) subirem.
+
+# Terminal 2 — confirma detecção (deve retornar pose):
+source ~/sim_ws/install/setup.bash && ros2 topic echo /detected_dock_pose --once
+
+# Terminal 2 — envia comando de docking:
+source ~/sim_ws/install/setup.bash
+ros2 action send_goal /dock_robot nav2_msgs/action/DockRobot \
+  "{use_dock_id: true, dock_id: 'base_carregamento', navigate_to_staging_pose: true}"
+
+================================================================================
+O QUE AINDA FALTA / PENDÊNCIAS
+================================================================================
+
+[A] TESTE COMPLETO DE DOCKING COM MOVIMENTO REAL
+    - O stack completo ainda não foi testado com o robô físico se movendo até a dock.
+    - O docking server recebe a pose e controla o robô, mas o resultado final
+      (robô para a 5cm da dock) não foi confirmado visualmente.
+    - Rodar e observar no RViz/Gazebo GUI se o robô avança e para corretamente.
+    - Se abortar com error_code=904 (FAILED_TO_DETECT_DOCK): verificar se
+      /detected_dock_pose está publicando ANTES de enviar o goal de docking.
+    - Se abortar com error_code=905 (FAILED_TO_CONTROL): ajustar docking_threshold
+      (atualmente 0.05m, aumentar para 0.10m se oscilar).
+
+[B] NAVEGAÇÃO AUTÔNOMA ATÉ A STAGING POSE (LONGO PRAZO)
+    - Com navigate_to_staging_pose: true e robô longe da dock, o Nav2 precisa de
+      um mapa SLAM maior para planejar a rota até (1.3, 0.0).
+    - Fluxo real: robô explora ambiente primeiro (constrói mapa), depois recebe
+      goal de docking. O dock_prestaging_tolerance=1.5m cobre o caso de spawn
+      próximo à dock.
+    - Se robô vier de longe: aumentar o dock_prestaging_tolerance para 0 e deixar
+      Nav2 navegar usando o mapa já construído.
+
+[C] LIDAR FALLBACK (FASE 2) NÃO TESTADO
+    - dock_pose_estimator.py tem lógica para usar LiDAR quando ArUco some (< ~0.5m).
+    - Nunca chegou a ser testado de perto o suficiente para ativar.
+    - Parâmetro: aruco_timeout=1.5s, sector_half_deg=30.0.
+
+================================================================================
+ARQUIVOS MODIFICADOS (ACUMULADO DAS DUAS SESSÕES)
+================================================================================
+
+nodes/dock_pose_estimator.py
+    - TF lookup: msg.header.stamp → rclpy.time.Time().to_msg() (fix principal)
+    - marker_size default: 0.40 → 0.30 (tamanho real da borda preta no painel)
+    - marker_size launch: 0.40 → 0.30
+    - _make_pose_stamped: adicionado parâmetro stamp (era estático, nunca setava)
+    - adaptiveThreshConstant=3, CORNER_REFINE_SUBPIX
+
+nodes/odom_to_tf.py
+    - CRIADO: publica odom→base_footprint com get_clock().now()
+
+config/gz_bridge.yaml
+    - Bridges TF (Pose_V) e joint_states removidas
+
+config/slam_params.yaml
+    - transform_timeout: 0.5 → 1.0s
+
+config/nav_params.yaml
+    - transform_tolerance: 0.5s em todos os costmaps e controller
+
+config/twist_mux_params.yaml
+    - use_stamped: false
+
+config/docking_params.yaml
+    - dock pose: yaw 3.14 → 0.0
+    - dock_prestaging_tolerance: 0.6 → 1.5m
+
+worlds/test.world
+    - Barris removidos
+    - Dock em (2.0, 0.0, yaw=0)
+    - Luz fill (dock_fill) adicionada para iluminar face ArUco
+
+models/charging_dock/model.sdf
+    - Collision box corrigida para dimensões reais do STL
+    - ArUco visual: x=0.232m (face frontal real)
+    - ArUco box: 0.002 × 0.40 × 0.40m (400mm físico)
+    - Material: emissive_map + emissive 1 1 1 1
+
+media/aruco-marker-ID=771(maior).png
+    - CONTEÚDO SUBSTITUÍDO: era DICT_ARUCO_ORIGINAL, agora é DICT_4X4_1000 ID=771
+    - 800×800px com zona silenciosa branca de 100px em cada borda
+
+CMakeLists.txt
+    - Instala aruco-marker-ID=771(maior).png como aruco_marker_771.png
+    - Instala odom_to_tf.py como PROGRAM
+
+launch/palmares_bot.launch.py
+    - +odom_to_tf node
+    - +joint_state_publisher node
+    - SLAM com TimerAction(5s)
+    - Nav2 com TimerAction(20s)
+    - Docking com TimerAction(25s)
+
+launch/docking.launch.py
+    - marker_size: 0.40 → 0.30
+
+================================================================================
+PARÂMETROS IMPORTANTES
+================================================================================
+
+Dock no mundo:           pose (2.0, 0.0, 0.0) em map frame, yaw=0
+ArUco ID:                771, DICT_4X4_1000
+Marcador físico (borda): 0.30m (75% do painel de 0.40m)
+stop_distance:           0.32m (robô para 5cm antes da face da dock)
+docking_threshold:       0.05m (tolerância para isDocked())
+staging pose:            (1.3, 0.0) = dock(2.0,0) + staging_x_offset(-0.7)
+staging tolerância:      1.5m (robô em (0,0) já está dentro → pula Nav2)
+================================================================================
