@@ -3,20 +3,129 @@
 Este documento explica a adaptacao feita para usar o robo `palmares_bot` no
 simulador com parametros inspirados no projeto Oregon.
 
-Ele parte da ideia de que a pessoa conhece apenas o fluxo basico do
-`diff_bot.launch.py`.
+Ele parte da ideia de que a pessoa conhece apenas uma simulacao ROS 2 basica
+com Gazebo, robot_state_publisher, bridge, RViz e Nav2.
+
+## Estado Atual Do Fluxo
+
+O fluxo principal da simulacao esta separado assim:
+
+```text
+sim_bot
+  -> Gazebo
+  -> robot_state_publisher
+  -> spawn do robo
+  -> ros_gz_bridge
+  -> RViz
+  -> teleoperacao opcional
+
+nav_hub
+  -> parametros Nav2
+  -> mapa
+  -> speed mask
+  -> grafo
+  -> Behavior Tree
+  -> launch de navegacao da simulacao
+```
+
+Fluxo de execucao:
+
+```text
+sim_bot/launch/sim_manager.launch.py
+  -> sim_bot/launch/sim_essentials.launch.py
+  -> sim_bot/launch/sim_navigation.launch.py
+      -> nav_hub/launch/route_graph/sim_nav_graph.launch.py
+```
+
+O antigo `sim_bot/launch/nav.launch.py` foi removido. A navegacao da simulacao
+passa a ser iniciada pelo `sim_nav_graph.launch.py` dentro do `nav_hub`, que e
+uma versao adaptada do `nav_graph.launch.py` da Oregon para uso com Gazebo.
+
+## Proximos Passos
+
+### 2. Atualizar Documentacao Final Do Fluxo
+
+Manter a documentacao apontando para a divisao atual:
+
+```text
+sim_bot = simulacao, Gazebo, spawn, robot_state_publisher, bridge, RViz
+nav_hub = navegacao, mapa, grafo, speed mask, BT, Nav2 launch
+```
+
+O comando principal deve continuar sendo:
+
+```bash
+ros2 launch sim_bot sim_manager.launch.py
+```
+
+### 3. Testar Os Cenarios Principais
+
+Teste principal da simulacao:
+
+```bash
+cd ~/sim_ws
+source install/setup.bash
+ros2 launch sim_bot sim_manager.launch.py
+```
+
+Visualizacao do grafo no RViz:
+
+```bash
+ros2 run sim_bot graph_visualizer
+```
+
+Teste de rota por ID:
+
+```bash
+ros2 run sim_bot route_to_poses --ros-args \
+  -p use_start:=False \
+  -p start_id:=1 \
+  -p goal_id:=17
+```
+
+### 4. Comparar sim_nav_graph Com nav_graph
+
+Comparar:
+
+```text
+nav_hub/launch/route_graph/sim_nav_graph.launch.py
+nav_hub/launch/route_graph/nav_graph.launch.py
+```
+
+Pontos para avaliar em futuros upgrades:
+
+```text
+remaps de cmd_vel
+lifecycle unico ou separado
+collision_monitor
+ground_segmentation
+main_route_graph
+controller custom
+dependencias de hardware real
+```
+
+### 5. Commitar Como Baseline
+
+Este ponto pode virar um baseline da integracao:
+
+```text
+sim_bot limpo
+nav_hub integrado
+navegacao da simulacao usando sim_nav_graph
+mapa/grafo/BT/speed mask centralizados no nav_hub
+```
 
 ## Visao Geral
 
-No projeto basico, o fluxo e:
+No projeto basico, o fluxo esperado e:
 
 ```text
-diff_bot.launch.py
+launch principal
   -> Gazebo
   -> robot_state_publisher
   -> bridge Gazebo/ROS
   -> RViz
-  -> nav.launch.py
+  -> launch de navegacao
       -> map_server / AMCL
       -> Nav2
 ```
@@ -24,14 +133,14 @@ diff_bot.launch.py
 Na adaptacao Palmares/Oregon, o fluxo fica:
 
 ```text
-palmares_bot.launch.py
+sim_manager.launch.py
   -> Gazebo
   -> robot_state_publisher com palmares_bot.urdf.xacro
   -> bridge Gazebo/ROS
   -> RViz
-      -> nav.launch.py
+      -> nav_hub/launch/route_graph/sim_nav_graph.launch.py
           -> map_server / AMCL
-          -> Nav2 com config/oregon_nav_params.yaml
+          -> Nav2 com nav_hub/config/sim_nav_params.yaml
           -> route_server, se route:=True
           -> speed_filter, se speed_filter:=True
           -> Behavior Tree de rota por grafo
@@ -40,29 +149,27 @@ palmares_bot.launch.py
 O comando principal de teste e:
 
 ```bash
-ros2 launch sim_bot palmares_bot.launch.py \
+ros2 launch sim_bot sim_manager.launch.py \
   world:=$PWD/src/sim_bot/worlds/aceleradora.world \
   slam:=False \
   nav:=True \
   rviz:=True \
   joy:=False \
   route:=True \
-  speed_filter:=True \
-  map:=$PWD/src/sim_bot/config_map/aceleradora/aceleradora.yaml \
-  params_file:=$PWD/src/sim_bot/config/oregon_nav_params.yaml
+  speed_filter:=True
 ```
 
-## palmares_bot.launch.py
+## sim_manager.launch.py
 
 Arquivo:
 
 ```text
-launch/palmares_bot.launch.py
+launch/sim_manager.launch.py
 ```
 
 Este e o launch principal para simular o robo Palmares.
 
-Ele faz o mesmo papel geral do `diff_bot.launch.py`, mas usando:
+Ele e o ponto de entrada da simulacao atual e usa:
 
 ```text
 description/palmares_bot.urdf.xacro
@@ -83,7 +190,7 @@ nav.launch.py, se nav:=True
 
 ### Por Que Ele Inclui nav.launch.py
 
-O `palmares_bot.launch.py` nao repete todos os nos do Nav2 diretamente.
+O `sim_manager.launch.py` nao repete todos os nos do Nav2 diretamente.
 Em vez disso, ele inclui:
 
 ```text
@@ -97,8 +204,7 @@ o mesmo `nav.launch.py`.
 
 ```text
 world:=<path>
-map:=<path>
-params_file:=<path>
+nav_params_file:=<path>
 route:=True|False
 slam:=True|False
 nav:=True|False
@@ -132,7 +238,7 @@ launch/nav.launch.py
 
 Este arquivo sobe a parte de navegacao.
 
-Ele e usado pelo `palmares_bot.launch.py` e tambem pode ser usado por outros
+Ele e usado pelo `sim_manager.launch.py` e tambem pode ser usado por outros
 launchs do pacote.
 
 ### O Que Ele Sobe Sempre Que nav:=True
@@ -148,9 +254,10 @@ velocity_smoother
 lifecycle_manager_navigation
 ```
 
-### O Que Ele Sobe Quando map:=... E Informado
+### Localizacao Com Mapa Pronto
 
-Quando o argumento `map` recebe um arquivo YAML de mapa, ele tambem sobe:
+No fluxo atual, o mapa pronto fica definido no arquivo `nav_params_file`,
+em `map_server.yaml_filename`. Com esse arquivo, o `nav.launch.py` sobe:
 
 ```text
 map_server
@@ -200,25 +307,27 @@ lifecycle_manager_speed_filter
 Esses nodes publicam a mascara de velocidade e a informacao do filtro usada
 pelo `global_costmap`.
 
-## oregon_nav_params.yaml
+## sim_nav_params.yaml
 
 Arquivo:
 
 ```text
-config/oregon_nav_params.yaml
+nav_hub/config/sim_nav_params.yaml
 ```
 
-Este arquivo e a configuracao Nav2 usada no teste Palmares/Oregon.
+Este arquivo e a configuracao Nav2 usada no teste Palmares/Oregon com o
+pacote `nav_hub` copiado como dependencia independente do simulador.
 
-Ele foi criado a partir do `config/nav_params.yaml` do simulador e recebeu
-parametros da Oregon de forma controlada.
+Ele foi criado a partir do `config/oregon_nav_params.yaml` que estava no
+`sim_bot`, mas agora mora dentro do `nav_hub` para deixar mapa, grafo, BT e
+parametros de navegacao no mesmo pacote da Oregon.
 
 ### Por Que Criar Um Arquivo Novo
 
 O `nav_params.yaml` original continua sendo a configuracao base do simulador.
 
-O `oregon_nav_params.yaml` existe para testar a migracao Oregon sem quebrar o
-comportamento conhecido do `diff_bot`.
+O `sim_bot/config/oregon_nav_params.yaml` fica como referencia local da
+migracao. O fluxo principal passa a usar `nav_hub/config/sim_nav_params.yaml`.
 
 ### AMCL
 
@@ -334,7 +443,8 @@ global_costmap
 
 ### route_server
 
-O bloco `route_server` tambem esta configurado no mesmo YAML:
+O bloco `route_server` tambem esta configurado no mesmo YAML. O caminho do
+grafo fica no proprio arquivo de parametros Nav2:
 
 ```yaml
 route_server:
@@ -604,16 +714,14 @@ source install/setup.bash
 Subir simulacao com route server:
 
 ```bash
-ros2 launch sim_bot palmares_bot.launch.py \
+ros2 launch sim_bot sim_manager.launch.py \
   world:=$PWD/src/sim_bot/worlds/aceleradora.world \
   slam:=False \
   nav:=True \
   rviz:=True \
   joy:=False \
   route:=True \
-  speed_filter:=True \
-  map:=$PWD/src/sim_bot/config_map/aceleradora/aceleradora.yaml \
-  params_file:=$PWD/src/sim_bot/config/oregon_nav_params.yaml
+  speed_filter:=True
 ```
 ```
 ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
@@ -728,7 +836,7 @@ que o grafo consegue gerar caminhos que o Nav2 consegue seguir.
 Arquivo principal:
 
 ```text
-config/oregon_nav_params.yaml
+nav_hub/config/sim_nav_params.yaml
 ```
 
 Comparar e ajustar, em pequenos testes:
@@ -776,7 +884,7 @@ speed_filter_mask_server configurado
 speed_costmap_filter_info_server configurado
 global_costmap com filters: ["speed_filter"]
 nav.launch.py com argumento speed_filter:=True
-palmares_bot.launch.py e diff_bot.launch.py repassam speed_filter
+sim_manager.launch.py repassa speed_filter para sim_navigation.launch.py
 ```
 
 Arquivos adicionados:
@@ -855,16 +963,14 @@ Resumo dos valores atuais da mascara:
 Para subir com speed filter:
 
 ```bash
-ros2 launch sim_bot palmares_bot.launch.py \
+ros2 launch sim_bot sim_manager.launch.py \
   world:=$PWD/src/sim_bot/worlds/aceleradora.world \
   slam:=False \
   nav:=True \
   rviz:=True \
   joy:=False \
   route:=True \
-  speed_filter:=True \
-  map:=$PWD/src/sim_bot/config_map/aceleradora/aceleradora.yaml \
-  params_file:=$PWD/src/sim_bot/config/oregon_nav_params.yaml
+  speed_filter:=True
 ```
 
 Topicos/nos esperados:
@@ -1288,9 +1394,9 @@ Estado validado no simulador:
 ```text
 Palmares no Gazebo
 AMCL com mapa aceleradora
-Nav2 usando config/oregon_nav_params.yaml
-route_server carregando graphs/aceleradoras.json
-BT btree/nav_on_route_graph_sim.xml ativa no 2D Goal Pose
+Nav2 usando nav_hub/config/sim_nav_params.yaml
+route_server carregando nav_hub/graphs/aceleradoras.json
+BT nav_hub/btree/nav_on_route_graph_oregon.xml ativa no 2D Goal Pose
 CostmapScorer ativo com invalid_on_collision:false
 CollisionMonitor ativo nas operations
 speed_filter ativo e testado
@@ -1315,17 +1421,53 @@ RViz 2D Goal Pose
 Comando principal:
 
 ```bash
-ros2 launch sim_bot palmares_bot.launch.py \
+ros2 launch sim_bot sim_manager.launch.py
+```
+
+O comando acima usa os defaults de:
+
+```text
+config/launch_params.yaml
+```
+
+Valores atuais:
+
+```yaml
+world: worlds/aceleradora.world
+slam: false
+nav: true
+rviz: true
+joy: false
+route: true
+speed_filter: true
+```
+
+Comando equivalente sobrescrevendo os parametros operacionais pelo terminal:
+
+```bash
+ros2 launch sim_bot sim_manager.launch.py \
   world:=$PWD/src/sim_bot/worlds/aceleradora.world \
   slam:=False \
   nav:=True \
   rviz:=True \
   joy:=False \
   route:=True \
-  speed_filter:=True \
-  map:=$PWD/src/sim_bot/config_map/aceleradora/aceleradora.yaml \
-  params_file:=$PWD/src/sim_bot/config/oregon_nav_params.yaml
+  speed_filter:=True
 ```
+
+Mapa, grafo e mascara de velocidade nao sao mais injetados pelo launch. Eles
+ficam no proprio arquivo de parametros Nav2:
+
+```text
+nav_hub/config/sim_nav_params.yaml
+  map_server.yaml_filename
+  route_server.graph_filepath
+  speed_filter_mask_server.yaml_filename
+```
+
+Isso facilita reaproveitar arquivos do robo real, porque o launch do simulador
+nao precisa conhecer detalhes internos de mapa, grafo ou mascara. Ele recebe
+apenas o arquivo de parametros Nav2.
 
 Comando para visualizar o grafo:
 
@@ -1484,7 +1626,7 @@ mantida.
 Proximo teste necessario depois dessa alteracao:
 
 ```text
-subir palmares_bot.launch.py com route:=True e speed_filter:=True
+subir sim_manager.launch.py com route:=True e speed_filter:=True
 abrir RViz
 rodar graph_visualizer
 enviar 2D Goal Pose
@@ -1540,4 +1682,208 @@ Ponto de atencao:
 na Oregon, alguns plugins e configuracoes podem depender de pacotes customizados.
 No simulador, manter primeiro os plugins padrao do Nav2 funcionando antes de
 substituir por implementacoes especificas do robo real.
+```
+
+## Arquitetura Hardware Oregon E Perfil Futuro
+
+A Oregon real esta organizada em servicos separados. A estrutura analisada foi:
+
+```text
+essentials.service
+  -> essentials.sh
+    -> essentials.launch.py (nav_hub)
+      -> display.launch.py (robot06_description)
+        -> robot06.urdf.xacro
+        -> robot_state_publisher
+        -> joint_state_publisher
+      -> stl27l.launch.py (ldlidar_stl_ros2)
+        -> ldlidar_node
+      -> sipeed_tof_node (sipeed_tof_ms_a010_ros)
+      -> canopen.launch.py (canopen_ros)
+        -> motor_control_node
+        -> odometry_node
+      -> nav_graph.launch.py (nav_hub/launch/route_graph)
+        -> config/nav_routegraph.yaml
+        -> remappings
+        -> composable_nodes
+        -> ground_segmentation_ros2
+        -> launch_amcl.launch.py
+        -> lifecycle_nodes
+
+navigation.service
+  -> navigation.sh
+    -> navigation.launch.py (nav_hub)
+      -> feedback.launch.py (mobby_feedback)
+        -> fitaled_node
+        -> controla_som_node
+      -> main_route_graph
+      -> botoeira_ponto_ponto_linear
+```
+
+No simulador, ainda nao foi criada essa separacao por servico. O baseline atual
+continua propositalmente mais simples:
+
+```text
+sim_manager.launch.py
+  -> Gazebo
+  -> robot_state_publisher
+  -> ros_gz_bridge
+  -> RViz
+  -> nav.launch.py
+    -> map_server + AMCL
+    -> Nav2
+    -> route_server
+    -> speed_filter
+```
+
+### Decisao Para O `launch_params.yaml`
+
+O `config/launch_params.yaml` passa a ser tratado como um perfil de execucao.
+Hoje ele e um perfil de simulacao, com:
+
+```text
+mode
+world
+robot_name
+robot_urdf
+spawn_x
+spawn_y
+spawn_z
+bridge_config
+rviz_config
+route
+speed_filter
+```
+
+O `sim_manager.launch.py` agora usa esse perfil para decidir a camada de
+execucao:
+
+```text
+mode:=simulation
+  -> sim_essentials.launch.py
+  -> sim_navigation.launch.py
+
+mode:=hardware
+  -> reservado para integracao futura com drivers reais
+```
+
+Camada atual de simulacao:
+
+```text
+sim_essentials.launch.py
+  -> Gazebo
+  -> robot_state_publisher
+  -> spawn do robo
+  -> ros_gz_bridge
+  -> sensores simulados definidos no xacro/Gazebo
+  -> RViz opcional
+
+sim_navigation.launch.py
+  -> slam.launch.py opcional
+  -> nav.launch.py
+    -> map_server + AMCL
+    -> Nav2
+    -> route_server
+    -> speed_filter
+```
+
+Esses valores nao ficam fixos no `sim_essentials.launch.py`. Eles sao recebidos
+do `sim_manager.launch.py`, que por sua vez le o `config/launch_params.yaml`.
+
+O `config/launch_params.yaml` nao e lido diretamente por
+`sim_essentials.launch.py` nem por `sim_navigation.launch.py`. O fluxo correto e:
+
+```text
+launch_params.yaml
+  -> sim_manager.launch.py
+    -> sim_essentials.launch.py
+    -> sim_navigation.launch.py
+      -> nav.launch.py
+```
+
+Se `sim_navigation.launch.py` for chamado diretamente, ele usa os defaults
+declarados nele e nao o perfil completo do `launch_params.yaml`.
+
+No futuro, esse mesmo conceito pode suportar dois modos:
+
+```yaml
+mode: simulation
+```
+
+ou:
+
+```yaml
+mode: hardware
+```
+
+Com `mode: simulation`, o launch escolheria arquivos e nos de simulacao:
+
+```text
+world Gazebo
+xacro com sensores simulados
+bridge ros_gz
+mapa/grafo/mascara do simulador
+```
+
+Com `mode: hardware`, o launch escolheria arquivos e nos reais:
+
+```text
+xacro do robo real
+ldlidar_stl_ros2
+sipeed_tof_ms_a010_ros
+canopen_ros
+feedback fisico
+main_route_graph
+botoeira_ponto_ponto_linear
+mapa/grafo/mascara do ambiente real
+```
+
+Essa etapa ainda nao deve ser implementada. Antes, o baseline de simulacao deve
+continuar funcionando e bem documentado.
+
+## Decisao Atual: AMCL E Ground Segmentation
+
+Na Oregon, a localizacao aparece separada em `launch_amcl.launch.py` dentro da
+estrutura do `nav_graph.launch.py`. No simulador atual, a localizacao continua
+dentro do `nav.launch.py`:
+
+```text
+nav.launch.py
+  -> map_server
+  -> amcl
+  -> lifecycle_manager_localization
+```
+
+Decisao:
+
+```text
+nao separar AMCL agora
+```
+
+Motivo:
+
+```text
+o simulador atual usa LaserScan 2D simples
+o fluxo map_server + AMCL + Nav2 ja esta funcionando
+separar agora aumentaria arquivos e repasses sem ganho imediato
+```
+
+Tambem foi decidido nao trazer `ground_segmentation_ros2` nesta etapa.
+
+Motivo:
+
+```text
+o robo/simulador atual nao esta usando camera ou PointCloud2 3D
+ground_segmentation_ros2 faz mais sentido com nuvem de pontos ou sensor 3D
+o baseline atual deve permanecer focado em LaserScan 2D
+```
+
+Quando houver sensor 3D/camera/PointCloud2 no simulador, a ordem recomendada e:
+
+```text
+1. adicionar sensor 3D no Xacro/Gazebo
+2. publicar PointCloud2 via bridge
+3. validar o topico no RViz
+4. avaliar ground_segmentation_ros2
+5. avaliar separar AMCL/localizacao em launch proprio
 ```

@@ -15,11 +15,7 @@ class GraphVisualizer(Node):
     def __init__(self):
         super().__init__('graph_visualizer')
 
-        default_graph = os.path.join(
-            get_package_share_directory('sim_bot'),
-            'graphs',
-            'aceleradoras.json',
-        )
+        default_graph = self._default_graph_path()
 
         self.declare_parameter('graph_file', default_graph)
         self.declare_parameter('frame_id', 'map')
@@ -145,6 +141,10 @@ class GraphVisualizer(Node):
         point.y = float(y)
         point.z = float(z)
         return point
+
+    def _default_graph_path(self):
+        nav_hub_share = get_package_share_directory('nav_hub')
+        return os.path.join(nav_hub_share, 'graphs', 'aceleradoras.json')
 
 
 def main():
