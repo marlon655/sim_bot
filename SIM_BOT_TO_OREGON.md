@@ -3,14 +3,15 @@
 Este documento organiza as etapas para adaptar a simulacao atual do `sim_bot`
 para usar configuracoes inspiradas no projeto Oregon.
 
-O arquivo principal de teste e:
+O arquivo principal de teste no fluxo atual e:
 
 ```bash
-src/sim_bot/config/oregon_nav_params.yaml
+src/nav_hub/config/sim_nav_params.yaml
 ```
 
-Ele foi criado a partir do `config/nav_params.yaml` do simulador, mantendo
-partes da Oregon comentadas para consulta e futura migracao.
+Ele foi criado a partir do `src/sim_bot/config/oregon_nav_params.yaml` usado
+nos primeiros testes, mas agora fica no pacote `nav_hub` para aproximar a
+simulacao da estrutura real da Oregon.
 
 ## 1. Confirmar o Frame Base do Robo
 
@@ -57,14 +58,12 @@ AMCL
 Comando de teste:
 
 ```bash
-ros2 launch sim_bot diff_bot.launch.py \
+ros2 launch sim_bot sim_manager.launch.py \
   world:=$PWD/src/sim_bot/worlds/aceleradora.world \
   slam:=False \
   nav:=True \
   rviz:=True \
-  joy:=False \
-  map:=$PWD/src/sim_bot/config_map/aceleradora/aceleradora.yaml \
-  params_file:=$PWD/src/sim_bot/config/oregon_nav_params.yaml
+  joy:=False
 ```
 
 Se esse teste nao rodar limpo, nao avance para os plugins especificos da Oregon.
@@ -538,3 +537,288 @@ documentar o que ficou generico para outros robos
 7. Separar parametros genericos dos parametros especificos do Palmares
 8. Manter speed_filter e grafo como recursos genericos configuraveis
 ```
+
+## Upgrades Depois Da Parametrizacao
+
+Depois que os argumentos de launch estiverem mais organizados e o fluxo puder
+trocar mapa, grafo, mascara e parametros sem editar YAML manualmente, avaliar:
+
+```text
+nav_hub/main_route_graph
+entrada por destino ID operacional
+status de navegacao
+rotas alternativas com custo por aresta
+ToF/STVL
+controller custom
+```
+
+Esses itens aproximam mais o simulador da operacao real da Oregon, mas devem
+entrar depois que o baseline atual estiver facil de iniciar e reaproveitar.
+
+Proximo foco imediato:
+
+```text
+melhorar e organizar os parametros de inicializacao dos launch files
+```
+
+## Parametros De Inicializacao Do Launch
+
+Foi criado um arquivo para centralizar os valores padrao do
+`sim_manager.launch.py`:
+
+```text
+config/launch_params.yaml
+```
+
+Com isso, o baseline Palmares/Oregon pode subir com:
+
+```bash
+ros2 launch sim_bot sim_manager.launch.py
+```
+
+Sem precisar repetir no terminal:
+
+```text
+mode
+world
+robot_name
+robot_urdf
+spawn_x
+spawn_y
+spawn_z
+bridge_config
+rviz_config
+slam
+nav
+rviz
+joy
+route
+speed_filter
+```
+
+Mapa, grafo de rota e mascara de velocidade ficam no arquivo de parametros
+Nav2 usado no fluxo atual:
+
+```text
+nav_hub/config/sim_nav_params.yaml
+  -> map_server.yaml_filename
+  -> route_server.graph_filepath
+  -> speed_filter_mask_server.yaml_filename
+```
+
+Assim o `sim_bot` nao precisa injetar esses caminhos pelo launch. Ele apenas
+chama o `nav_hub` como pacote de navegacao e usa o arquivo de parametros
+principal do proprio `nav_hub`.
+
+O perfil foi separado em secoes comentadas:
+
+```text
+Mode
+Simulation essentials
+Navigation
+```
+
+Os campos de `Simulation essentials` controlam Gazebo, spawn do robo, xacro,
+bridge e RViz. Os campos de `Navigation` controlam se SLAM, Nav2, route_server
+e speed_filter sobem. Os caminhos internos de mapa/grafo/mascara ficam no YAML
+do Nav2, para facilitar reaproveitar arquivos do robo real.
+
+Essa abordagem deve ser usada como base para outros robos/clientes:
+
+```text
+criar ou ajustar um arquivo de parametros Nav2
+apontar mapa, grafo e mascara dentro desse arquivo
+manter o launch simples para o operador
+```
+
+## Camadas De Launch Da Simulacao
+
+O `sim_manager.launch.py` foi reorganizado para se aproximar da separacao da
+Oregon, mas mantendo o baseline Gazebo:
+
+```text
+launch/sim_manager.launch.py
+  -> le config/launch_params.yaml
+  -> se mode:=simulation
+    -> launch/sim_essentials.launch.py
+    -> launch/sim_navigation.launch.py
+  -> se mode:=hardware
+    -> modo reservado para integracao futura
+```
+
+Camada de essenciais da simulacao:
+
+```text
+launch/sim_essentials.launch.py
+  -> Gazebo server/client
+  -> robot_state_publisher
+  -> spawn do palmares_bot
+  -> ros_gz_bridge
+  -> joystick opcional
+  -> RViz opcional
+```
+
+Camada de navegacao da simulacao:
+
+```text
+launch/sim_navigation.launch.py
+  -> slam.launch.py, se slam:=True
+  -> nav_hub/launch/route_graph/sim_nav_graph.launch.py, se nav:=True
+    -> map_server + AMCL
+    -> Nav2
+    -> route_server, se route:=True
+    -> speed_filter, se speed_filter:=True
+```
+
+Regra importante:
+
+```text
+config/launch_params.yaml e lido pelo sim_manager.launch.py
+sim_essentials.launch.py recebe argumentos do sim_manager.launch.py
+sim_navigation.launch.py recebe argumentos do sim_manager.launch.py
+rodar sim_navigation.launch.py direto usa apenas os defaults internos dele
+```
+
+Com isso, o comando principal continua o mesmo:
+
+```bash
+ros2 launch sim_bot sim_manager.launch.py
+```
+
+Mas a estrutura ficou preparada para, no futuro, trocar a camada de simulacao
+por uma camada de hardware real.
+
+## Arquitetura Oregon No Hardware
+
+A estrutura observada na Oregon real esta separada em dois servicos principais:
+
+```text
+essentials.service
+  -> essentials.sh
+    -> essentials.launch.py (nav_hub)
+      -> display.launch.py (robot06_description)
+        -> robot06.urdf.xacro
+        -> robot_state_publisher
+        -> joint_state_publisher
+      -> stl27l.launch.py (ldlidar_stl_ros2)
+        -> ldlidar_node
+      -> sipeed_tof_node (sipeed_tof_ms_a010_ros)
+      -> canopen.launch.py (canopen_ros)
+        -> motor_control_node
+        -> odometry_node
+      -> nav_graph.launch.py (nav_hub/launch/route_graph)
+        -> config/nav_routegraph.yaml
+        -> remappings
+        -> composable_nodes
+        -> ground_segmentation_ros2
+        -> launch_amcl.launch.py
+        -> lifecycle_nodes
+
+navigation.service
+  -> navigation.sh
+    -> navigation.launch.py (nav_hub)
+      -> feedback.launch.py (mobby_feedback)
+        -> fitaled_node
+        -> controla_som_node
+      -> main_route_graph
+      -> botoeira_ponto_ponto_linear
+```
+
+No simulador atual, a equivalencia ainda nao e completa. O objetivo agora e
+manter funcionando primeiro:
+
+```text
+Gazebo
+robot_state_publisher
+bridge Gazebo/ROS
+map_server + AMCL
+Nav2
+route_server
+BT de rota por grafo
+speed_filter
+graph_visualizer
+```
+
+Depois que essa base estiver estavel, a arquitetura pode evoluir para uma
+separacao parecida com a Oregon:
+
+```text
+launch de essenciais da simulacao
+  -> robo, mundo, sensores simulados, bridge, TF, odometria
+
+launch de navegacao
+  -> Nav2, route_server, BT, speed_filter, clientes operacionais
+```
+
+## Perfil Simulation/Hardware Futuro
+
+A ideia futura e usar o `config/launch_params.yaml` como perfil operacional.
+Hoje ele representa o perfil de simulacao e ja possui um campo de modo:
+
+```yaml
+mode: simulation
+```
+
+ou:
+
+```yaml
+mode: hardware
+```
+
+Com `mode: simulation`, o launch usaria:
+
+```text
+Gazebo
+world
+mapa do simulador
+grafo do simulador
+mascara de velocidade do simulador
+sensores simulados via xacro/Gazebo
+bridge ros_gz
+```
+
+Com `mode: hardware`, o launch usaria:
+
+```text
+URDF/Xacro do robo real
+driver real do lidar
+driver real de ToF
+canopen_ros
+odometria real
+mapa/grafo/mascara do ambiente real
+feedback fisico, som, leds e botoeira
+```
+
+Essa mudanca deve ficar para depois. Por enquanto, a regra e:
+
+```text
+nao misturar hardware real no baseline da simulacao
+validar primeiro o fluxo Gazebo/Oregon atual
+deixar os nomes dos parametros genericos para facilitar a troca depois
+```
+
+## Decisao Atual Sobre AMCL E Ground Segmentation
+
+Apesar da Oregon possuir `launch_amcl.launch.py` separado, no simulador atual o
+AMCL permanece dentro do `nav_hub/launch/route_graph/sim_nav_graph.launch.py`.
+
+Motivo:
+
+```text
+o simulador esta usando LaserScan 2D
+map_server + AMCL + Nav2 ja estao funcionando
+separar AMCL agora nao traz ganho imediato
+```
+
+O `ground_segmentation_ros2` tambem fica fora por enquanto.
+
+Motivo:
+
+```text
+nao ha camera/sensor 3D ativo no robo atual
+nao ha PointCloud2 sendo usado pelo Nav2 neste baseline
+o foco atual e manter o grafo, AMCL, speed_filter e Nav2 estaveis
+```
+
+Reavaliar essa decisao somente depois de adicionar sensor 3D ou nuvem de pontos
+no simulador.

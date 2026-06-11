@@ -13,18 +13,19 @@ def generate_launch_description():
 
     # Launch configurations
     use_sim_time = LaunchConfiguration('use_sim_time')
-    params_file = LaunchConfiguration('params_file')
+    slam_params_file = LaunchConfiguration('slam_params_file')
     
     # Path to configuration file 
-    params_file = os.path.join(get_package_share_directory(package_name),'config', 'slam_params.yaml')
+    default_slam_params_file = os.path.join(
+        get_package_share_directory(package_name), 'config', 'slam_params.yaml')
 
     # Declare the launch configuration
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='false',
         description='Use simulation/Gazebo clock')
     
-    declare_params_file = DeclareLaunchArgument(
-        'params_file', default_value=params_file,
+    declare_slam_params_file = DeclareLaunchArgument(
+        'slam_params_file', default_value=default_slam_params_file,
         description='Full path to the parameters file to use for the slam_toolbox node')
 
     # Launch the slam node with launch configs
@@ -33,13 +34,13 @@ def generate_launch_description():
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
         output='screen',
-        parameters=[params_file, {'use_sim_time': use_sim_time}]
+        parameters=[slam_params_file, {'use_sim_time': use_sim_time}]
     )
 
     # Launch!
     ld = LaunchDescription()
     ld.add_action(declare_use_sim_time)
-    ld.add_action(declare_params_file)
+    ld.add_action(declare_slam_params_file)
     ld.add_action(slam_node)
 
     return ld

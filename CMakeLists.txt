@@ -12,7 +12,7 @@ find_package(ament_cmake REQUIRED)
 
 # Install files
 install(
-  DIRECTORY btree config config_map description graphs launch meshes rviz worlds models
+  DIRECTORY config description launch meshes rviz worlds models
   DESTINATION share/${PROJECT_NAME}
 )
 
