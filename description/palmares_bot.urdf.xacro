@@ -8,6 +8,9 @@
     <!-- Include lidar (parents to 'chassis' link defined below) -->
     <xacro:include filename="lidar.xacro"/>
 
+    <!-- Include camera (parents to 'chassis' link defined below) -->
+    <xacro:include filename="camera.xacro"/>
+
     <!-- ══════════════════════════════════════════════════════════════════
          ROBOT DIMENSIONS  (STL in mm → scaled to metres at 0.001)
          Bounding box: 533 × 460 × 428 mm

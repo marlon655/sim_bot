@@ -1,7 +1,7 @@
 bt_navigator:
   ros__parameters:
     use_sim_time: True
-    global_frame: map
+    global_frame: odom
     robot_base_frame: base_link
     odom_topic: /odom
     bt_loop_duration: 10
@@ -136,14 +136,21 @@ global_costmap:
     ros__parameters:
       update_frequency: 1.0
       publish_frequency: 1.0
-      global_frame: map
+      global_frame: odom
       robot_base_frame: base_link
       use_sim_time: True
       robot_radius: 0.35
       resolution: 0.05
       track_unknown_space: true
       transform_tolerance: 0.5
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      # Fixed large bounds in odom frame so robot at (0,0) is always inside.
+      # Covers from (-3,-3) to (17,17) — well beyond spawn (0,0) and dock (5,3).
+      width: 20
+      height: 20
+      origin_x: -3.0
+      origin_y: -3.0
+      rolling_window: false
+      plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -154,13 +161,10 @@ global_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 3.0
+          raytrace_max_range: 12.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
+          obstacle_max_range: 10.0
           obstacle_min_range: 0.0
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -173,10 +177,14 @@ planner_server:
     use_sim_time: True
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_navfn_planner::NavfnPlanner"
+      plugin: "nav2_smac_planner::SmacPlanner2D"
       tolerance: 0.5
-      use_astar: true
       allow_unknown: true
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      motion_model_for_search: "MOORE"
+      cost_travel_multiplier: 2.0
 
 smoother_server:
   ros__parameters:

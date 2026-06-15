@@ -18,7 +18,7 @@ install(
 
 # Install Python executables to lib/<pkg> so ros2 run can find them
 install(
-  PROGRAMS nodes/dock_pose_estimator.py nodes/odom_to_tf.py
+  PROGRAMS nodes/dock_pose_estimator.py nodes/odom_to_tf.py nodes/charging_manager.py nodes/alignment_test.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

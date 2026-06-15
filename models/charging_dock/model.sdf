@@ -42,18 +42,18 @@
            Pose in dock-model frame:
              x = -0.202  → just in front of the collision face at x = -0.20
              y =  0.00   → centred left-right
-             z =  0.10   → mid-height of a 200 mm tall base
+             z =  0.265  → lowered 5 cm (was 0.315) to match camera absolute height (0.265 m)
            Rotation: pitch = -π/2  → local +Z faces world -X (toward robot)
       ──────────────────────────────────────────────────────────────── -->
       <visual name="aruco_visual">
         <!-- STL front face (min-X) is at local x=0.235 m, facing the robot (-X world).
              Place ArUco 3 mm in front of that face so it is fully visible.
-             Z centre = 470/2 mm = 0.235 m (mid-height of the base). -->
-        <pose>0.232 0 0.235 0 0 0</pose>
+             Z centre = 0.265 m — matches camera absolute height for centred detection. -->
+        <pose>0.232 0 0.265 0 0 0</pose>
         <geometry>
           <box>
-            <!-- 400 mm × 400 mm tag, 2 mm thick -->
-            <size>0.002 0.40 0.40</size>
+            <!-- 200 mm × 200 mm tag, 2 mm thick — smaller for close-range detection -->
+            <size>0.002 0.20 0.20</size>
           </box>
         </geometry>
         <material>

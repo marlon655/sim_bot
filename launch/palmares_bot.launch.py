@@ -129,6 +129,8 @@ def generate_launch_description():
         executable='create',
         arguments=['-topic', 'robot_description',
                    '-name', 'palmares_bot',
+                   '-x', '-3.0',
+                   '-y', '-3.0',
                    '-z', '0.15'],
         output='screen'
     )

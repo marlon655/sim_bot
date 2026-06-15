@@ -16,12 +16,14 @@ def generate_launch_description():
         name='dock_pose_estimator',
         output='screen',
         parameters=[{
-            'use_sim_time': True,
-            'marker_id':       771,
-            'marker_size':     0.30,    # physical marker size [m] (outer black border is 300 mm on a 400 mm panel)
-            'stop_distance':   0.32,    # offset before marker → ~5 cm clearance
-            'aruco_timeout':   1.5,     # s – LiDAR takes over after this
-            'sector_half_deg': 30.0,    # LiDAR frontal sector half-angle
+            'use_sim_time':      True,
+            'marker_id':         771,
+            'marker_size':       0.15,   # outer black border [m] — panel 0.20 m, quiet zone 0.025 m/side
+            'stop_distance':     0.30,   # robot_front(0.252) + 5cm gap = 0.302 ≈ 0.30 m
+            'aruco_timeout':     2.0,    # s – LiDAR takes over after ArUco lost (longer = ArUco stays primary)
+            'sector_half_deg':   30.0,   # normal LiDAR sector half-angle
+            'close_sector_deg':  60.0,   # wide sector used when range < close_range_m
+            'close_range_m':     0.5,    # switch to wide sector below this range
         }]
     )
 
@@ -51,8 +53,18 @@ def generate_launch_description():
         }]
     )
 
+    # ── Charging manager (full autonomous charge cycle orchestrator) ───────
+    charging_manager = Node(
+        package='sim_bot',
+        executable='charging_manager.py',
+        name='charging_manager',
+        output='screen',
+        parameters=[{'use_sim_time': True}]
+    )
+
     return LaunchDescription([
         dock_estimator,
         docking_server,
         docking_lifecycle_manager,
+        charging_manager,
     ])
