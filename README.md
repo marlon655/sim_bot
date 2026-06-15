@@ -1,214 +1,90 @@
 # Sim Bot
 
-Pacote ROS 2 para simulacao de robos moveis diferenciais no Gazebo Sim. Esta versao foi ajustada para ROS 2 Jazzy, Ubuntu 24.04 e Gazebo Sim 8.
+Pacote ROS 2 para simular no Gazebo qualquer robo declarado no perfil de
+launch. A navegacao da simulacao ainda segue o modelo adaptado da Oregon por
+meio do pacote `nav_hub`.
 
-O pacote inclui:
+O fluxo atual separa as responsabilidades assim:
 
-- Robo diferencial de 2 rodas
-- Robo diferencial de 4 rodas
-- URDF/Xacro
-- sensores simulados: lidar 2D, camera de profundidade e topicos de imagem/pontos
-- bridge ROS 2 <-> Gazebo Sim
-- SLAM com `slam_toolbox`
-- navegacao com Nav2
-- teleoperacao por joystick com `teleop_twist_joy`
+```text
+sim_bot
+  -> Gazebo
+  -> robot_state_publisher
+  -> spawn do robo
+  -> ros_gz_bridge
+  -> RViz
+  -> joystick opcional
+  -> scripts auxiliares de teste
+
+nav_hub
+  -> parametros Nav2
+  -> mapa
+  -> speed mask
+  -> grafo
+  -> Behavior Tree
+  -> launch de navegacao da simulacao
+```
 
 ## Requisitos
 
-- Ubuntu 24.04
-- ROS 2 Jazzy
-- Gazebo Sim 8, instalado via pacotes ROS Jazzy
+```text
+Ubuntu 24.04
+ROS 2 Jazzy
+Gazebo Sim 8
+```
 
-Antes de instalar este pacote, garanta que o ROS 2 Jazzy esteja instalado e disponivel:
+Sempre carregue o ROS 2 antes de compilar ou executar:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 ```
 
-## Instalar
+## Compilar
 
-Crie um workspace, clone o pacote e instale as dependencias:
+Na raiz do workspace:
 
 ```bash
-mkdir -p ~/sim_ws/src
-cd ~/sim_ws/src
-git clone -b humble-new-gazebo https://github.com/marlon655/sim_bot.git
-
 cd ~/sim_ws
-source /opt/ros/jazzy/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install
+colcon build --packages-select nav_hub sim_bot
 source install/setup.bash
 ```
 
-Se `rosdep` ainda nao estiver configurado no seu sistema:
+Se for compilar tudo:
 
 ```bash
-sudo apt update
-sudo apt install -y python3-rosdep python3-colcon-common-extensions
-sudo rosdep init
-rosdep update
-```
-
-Se `sudo rosdep init` informar que o arquivo ja existe, ignore esse passo e rode apenas:
-
-```bash
-rosdep update
-```
-
-## Rodar
-
-Sempre que abrir um novo terminal, carregue o ROS 2 e o workspace:
-
-```bash
-cd ~/sim_ws
-source /opt/ros/jazzy/setup.bash
+colcon build
 source install/setup.bash
 ```
 
-Simulacao principal do Palmares:
+## Fluxo De Launch
 
-```bash
-ros2 launch sim_bot sim_manager.launch.py
-```
-
-Para confirmar que o pacote esta visivel para o ROS:
-
-```bash
-ros2 pkg prefix sim_bot
-```
-
-O retorno esperado deve apontar para:
-
-```bash
-~/sim_ws/install/sim_bot
-```
-
-## Argumentos De Launch
-
-Os principais argumentos aceitos por `sim_manager.launch.py`:
+O ponto de entrada principal e:
 
 ```text
-world:=<path>       Mundo SDF a carregar. Padrao: test.world
-headless:=True     Roda sem abrir a interface grafica do Gazebo
-rviz:=False        Nao abre o RViz
-joy:=False         Desativa teleoperacao por joystick
-slam:=False        Desativa SLAM
-nav:=False         Desativa Nav2
-nav_params_file:=<path> Arquivo YAML de parametros do Nav2. Padrao: nav_hub/config/sim_nav_params.yaml
+sim_bot/launch/sim_manager.launch.py
 ```
 
-Exemplo rodando sem joystick e sem Nav2:
-
-```bash
-ros2 launch sim_bot sim_manager.launch.py joy:=False nav:=False
-```
-
-Exemplo rodando sem interface grafica:
-
-```bash
-ros2 launch sim_bot sim_manager.launch.py headless:=True
-```
-
-## Teleoperacao
-
-Por padrao, o launch inicia teleoperacao por joystick. Para usar teclado, instale o pacote opcional:
-
-```bash
-sudo apt install -y ros-jazzy-teleop-twist-keyboard
-```
-
-Inicie a simulacao com joystick desativado:
-
-```bash
-ros2 launch sim_bot sim_manager.launch.py joy:=False
-```
-
-Em outro terminal:
-
-```bash
-cd ~/sim_ws
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
-```
-
-## Navegacao Com Mapa Existente
-
-Para navegar usando um mapa `.yaml/.pgm` ja salvo, rode sem SLAM e com Nav2
-ativo. No fluxo atual, o mapa fica definido no arquivo de parametros do
-`nav_hub`.
-
-Exemplo usando o mundo e o mapa da aceleradora:
-
-```bash
-cd ~/sim_ws
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
-ros2 launch sim_bot sim_manager.launch.py \
-  world:=$PWD/src/sim_bot/worlds/aceleradora.world \
-  slam:=False \
-  nav:=True \
-  rviz:=True \
-  joy:=False
-```
-
-O mapa usado no fluxo Oregon/Palmares fica definido no arquivo de parametros Nav2,
-em `map_server.yaml_filename`. O arquivo YAML do mapa deve apontar para o `.pgm`.
-Se os dois arquivos estiverem na mesma pasta, o caminho relativo e suficiente:
-
-```yaml
-image: aceleradora.pgm
-resolution: 0.050000
-origin: [-49.632501, -5.931761, 0.000000]
-negate: 0
-occupied_thresh: 0.65
-free_thresh: 0.196
-```
-
-No fluxo atual, `nav_hub/launch/route_graph/sim_nav_graph.launch.py` inicia a
-localizacao usando o mapa definido no arquivo de parametros Nav2:
+Fluxo executado:
 
 ```text
-map_server                  Carrega e publica o /map
-amcl                        Localiza o robo no mapa e publica map -> odom
-lifecycle_manager_localization  Ativa map_server e amcl automaticamente
+sim_manager.launch.py
+  -> sim_essentials.launch.py
+  -> sim_navigation.launch.py
+      -> nav_hub/launch/route_graph/sim_nav_graph.launch.py
 ```
 
-No RViz, primeiro use `2D Pose Estimate` para informar a pose inicial do robo no mapa. Depois use `Nav2 Goal` para enviar o objetivo.
-
-O Nav2 publica comandos diretamente em `/cmd_vel`, que e o topico usado pelo bridge ROS 2 <-> Gazebo. Os parametros `enable_stamped_cmd_vel: false` em `controller_server` e `behavior_server` mantem esse topico como `geometry_msgs/msg/Twist`, compativel com o Gazebo Sim.
-
-## Fluxo Palmares/Oregon
-
-Este fluxo usa o `palmares_bot`, mapa pronto, Nav2, route server, grafo de rotas
-e filtro de velocidade. Ele e o fluxo principal para testar a adaptacao baseada
-na arquitetura da Oregon.
-
-### 1. Inicializar Simulacao
-
-O `sim_manager.launch.py` carrega os valores padrao de:
+`sim_manager.launch.py` le os valores padrao de:
 
 ```text
-config/launch_params.yaml
+sim_bot/config/launch_params.yaml
 ```
 
-Por isso, o fluxo Palmares/Oregon pode ser iniciado apenas com:
-
-```bash
-cd ~/sim_ws
-source install/setup.bash
-
-ros2 launch sim_bot sim_manager.launch.py
-```
-
-Arquivo de parametros carregado pelo launch:
+O arquivo atual:
 
 ```yaml
 mode: simulation
 
-# Simulation essentials
 world: worlds/aceleradora.world
 robot_name: palmares_bot
 robot_urdf: description/palmares_bot.urdf.xacro
@@ -220,75 +96,119 @@ rviz_config: rviz/bot.rviz
 rviz: true
 joy: false
 
-# Navigation
 slam: false
 nav: true
 route: true
 speed_filter: true
 ```
 
-Os caminhos podem ser absolutos ou relativos ao pacote `sim_bot`.
+Neste exemplo, o perfil usa o Xacro `palmares_bot.urdf.xacro`, mas o simulador
+nao e fixo nesse robo. Para testar outro robo, altere principalmente:
 
-Significado dos parametros:
-
-```text
-mode:=simulation   Usa a camada de simulacao baseada em Gazebo.
-world:=...          Mundo Gazebo usado na simulacao.
-robot_name:=...     Nome usado no spawn do robo no Gazebo.
-robot_urdf:=...     Xacro/URDF usado pelo robot_state_publisher.
-spawn_x/y/z:=...    Pose inicial do robo no Gazebo.
-bridge_config:=...  YAML do ros_gz_bridge.
-rviz_config:=...    Arquivo de configuracao do RViz.
-slam:=False         Desliga SLAM, pois este fluxo usa mapa pronto.
-nav:=True           Sobe a pilha Nav2.
-rviz:=True          Abre o RViz.
-joy:=False          Desliga teleoperacao por joystick para evitar conflito com Nav2.
-route:=True         Sobe o nav2_route/route_server para calcular rotas pelo grafo.
-speed_filter:=True  Sobe os servidores do filtro de velocidade.
+```yaml
+robot_name: nome_do_robo
+robot_urdf: description/outro_robo.urdf.xacro
 ```
 
-Mapa, grafo de rota e mascara de velocidade ficam definidos no arquivo de
-parametros Nav2 do pacote `nav_hub`:
+Os caminhos nesse arquivo podem ser absolutos ou relativos ao pacote `sim_bot`.
 
-```text
-nav_hub/config/sim_nav_params.yaml
-  -> map_server.yaml_filename
-  -> route_server.graph_filepath
-  -> speed_filter_mask_server.yaml_filename
-```
+## Executar Simulacao
 
-No fluxo atual, esses arquivos ficam no `nav_hub`. O `sim_bot` nao mantem mais
-copias locais de mapa, grafo, mascara ou Behavior Tree de navegacao.
-
-Ainda e possivel sobrescrever qualquer parametro pelo terminal:
+Em um terminal:
 
 ```bash
-ros2 launch sim_bot sim_manager.launch.py rviz:=False joy:=True
+cd ~/sim_ws
+source install/setup.bash
+ros2 launch sim_bot sim_manager.launch.py
 ```
 
-O `sim_manager.launch.py` organiza a simulacao em duas camadas:
+Esse comando sobe:
 
 ```text
-sim_essentials.launch.py
-  -> Gazebo, robot_state_publisher, spawn do robo, bridge, RViz e joystick
-
-sim_navigation.launch.py
-  -> slam opcional, nav_hub/launch/route_graph/sim_nav_graph.launch.py
-  -> Nav2, route_server e speed_filter
+Gazebo
+robot_state_publisher
+spawn do robo configurado em robot_name/robot_urdf
+ros_gz_bridge
+RViz
+Nav2
+AMCL
+route_server
+speed_filter
 ```
 
-O `config/launch_params.yaml` e lido apenas pelo `sim_manager.launch.py`.
-Os launches de camada recebem os valores como argumentos. Portanto, para usar o
-perfil completo, rode pelo orquestrador:
+Tambem e possivel sobrescrever parametros no terminal:
+
+```bash
+ros2 launch sim_bot sim_manager.launch.py rviz:=False
+```
+
+```bash
+ros2 launch sim_bot sim_manager.launch.py joy:=True nav:=False
+```
+
+```bash
+ros2 launch sim_bot sim_manager.launch.py headless:=True
+```
+
+## Arquivos De Navegacao
+
+A navegacao da simulacao fica centralizada no `nav_hub`.
+
+Arquivos principais:
+
+```text
+nav_hub/launch/route_graph/sim_nav_graph.launch.py
+nav_hub/config/sim_nav_params.yaml
+nav_hub/maps/aceleradora.yaml
+nav_hub/maps/aceleradora.pgm
+nav_hub/maps/aceleradora_speed_mask.yaml
+nav_hub/maps/aceleradora_speed_mask.pgm
+nav_hub/graphs/aceleradoras.json
+nav_hub/btree/nav_on_route_graph_oregon.xml
+```
+
+O `sim_nav_graph.launch.py` sobe a pilha Nav2 para simulacao:
+
+```text
+map_server
+amcl
+controller_server
+smoother_server
+planner_server
+behavior_server
+bt_navigator
+waypoint_follower
+velocity_smoother
+route_server
+speed_filter_mask_server
+speed_costmap_filter_info_server
+lifecycle managers
+```
+
+O `sim_bot` nao mantem mais copia local de mapa, grafo, speed mask ou Behavior
+Tree. Esses arquivos ficam no `nav_hub`.
+
+## Teste Pelo RViz
+
+Depois de subir:
 
 ```bash
 ros2 launch sim_bot sim_manager.launch.py
 ```
 
-Com esse launch, o fluxo esperado ao clicar em `2D Goal Pose` no RViz e:
+No RViz:
 
 ```text
-RViz 2D Goal Pose
+1. Confira se o mapa aparece.
+2. Confira se o robo aparece no mapa.
+3. Use 2D Pose Estimate se precisar ajustar a pose inicial.
+4. Use 2D Goal Pose para enviar um destino.
+```
+
+Fluxo esperado ao enviar um goal:
+
+```text
+RViz
   -> bt_navigator
   -> nav_hub/btree/nav_on_route_graph_oregon.xml
   -> ComputeRoute
@@ -297,35 +217,45 @@ RViz 2D Goal Pose
   -> SmoothPath
   -> FollowPath
   -> /cmd_vel
+  -> Gazebo
 ```
 
-### 2. Visualizar O Grafo No RViz
+Fluxo de velocidade:
+
+```text
+controller_server
+  -> /controller_cmd_vel
+  -> velocity_smoother
+  -> /cmd_vel
+  -> ros_gz_bridge
+  -> Gazebo
+```
+
+Esse remap aproxima a simulacao do padrao usado na Oregon: o controller nao
+publica diretamente no topico final do robo, ele passa primeiro pelo
+`velocity_smoother`.
+
+Se o goal for aceito, o robo deve seguir o caminho do grafo. Se houver obstaculo
+sobre a rota, o comportamento esperado e reduzir/parar/abortar conforme os
+parametros de costmap, controller e collision checks.
+
+## Visualizar O Grafo
 
 Em outro terminal:
 
 ```bash
 cd ~/sim_ws
 source install/setup.bash
-
 ros2 run sim_bot graph_visualizer
 ```
 
-Por padrao, o `graph_visualizer` usa o grafo do pacote `nav_hub`:
-
-```text
-nav_hub/graphs/aceleradoras.json
-```
-
-O pacote `nav_hub` precisa estar compilado no workspace, pois o `sim_bot` nao
-mantem mais uma copia local do grafo.
-
-No RViz, adicione:
+No RViz:
 
 ```text
 Add -> By topic -> /route_graph_markers -> MarkerArray
 ```
 
-O visualizador mostra:
+O visualizador publica:
 
 ```text
 linhas azuis: arestas do grafo
@@ -333,22 +263,120 @@ esferas amarelas: nos do grafo
 texto branco: ID dos nos
 ```
 
-### 3. Posicionar O Robo No No 1
+Por padrao, o script usa:
 
-Para testar `route_to_poses` com `start_id:=1`, primeiro envie o robo para a
-posicao do no 1:
-
-```bash
-ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
-"{pose: {header: {frame_id: 'map'}, pose: {position: {x: 17.41612434387207, y: 18.228958129882812, z: 0.0}, orientation: {w: 1.0}}}}"
+```text
+nav_hub/graphs/aceleradoras.json
 ```
 
-Esse passo e util quando o teste usa IDs fixos no grafo e voce quer garantir
-que a posicao real do robo esta coerente com o `start_id`.
+Para usar outro grafo:
 
-### 4. Testar Rota Por ID
+```bash
+ros2 run sim_bot graph_visualizer --ros-args \
+  -p graph_file:=$PWD/src/nav_hub/graphs/aceleradoras.json
+```
 
-Depois que o robo estiver proximo do no 1:
+## Ir De Um Ponto A Outro Pelo Grafo
+
+O script `route_to_poses` chama o `route_server`, calcula uma rota por IDs do
+grafo e envia o caminho para o Nav2 seguir.
+
+Exemplo:
+
+```bash
+cd ~/sim_ws
+source install/setup.bash
+
+ros2 run sim_bot route_to_poses --ros-args \
+  -p use_start:=False \
+  -p start_id:=1 \
+  -p goal_id:=17
+```
+
+Parametros principais:
+
+```text
+start_id       ID inicial no grafo.
+goal_id        ID final no grafo.
+use_start      Se False, usa start_id. Se True, o route_server pode usar a pose atual.
+use_poses      Mantido False para rota por IDs.
+mode           follow_path ou navigate_through_poses.
+max_poses      Limita a quantidade de poses enviadas. 0 nao limita.
+```
+
+Modos:
+
+```bash
+ros2 run sim_bot route_to_poses --ros-args \
+  -p use_start:=False \
+  -p start_id:=1 \
+  -p goal_id:=17 \
+  -p mode:=follow_path
+```
+
+```bash
+ros2 run sim_bot route_to_poses --ros-args \
+  -p use_start:=False \
+  -p start_id:=1 \
+  -p goal_id:=17 \
+  -p mode:=navigate_through_poses
+```
+
+Para esse teste ficar coerente, o robo precisa estar perto do no inicial usado
+em `start_id`, ou a rota pode tentar comecar de um ponto distante da pose real.
+
+## Testes Recomendados
+
+### 1. Launch Principal
+
+```bash
+ros2 launch sim_bot sim_manager.launch.py
+```
+
+Validar:
+
+```text
+Gazebo abriu
+RViz abriu
+mapa apareceu
+robo apareceu
+AMCL ativo
+Nav2 ativo
+route_server ativo
+speed_filter ativo
+```
+
+### 2. Goal Pelo RViz
+
+Enviar `2D Goal Pose`.
+
+Validar:
+
+```text
+robo se move
+rota segue o grafo
+nao aparece erro de BT XML
+nao aparece erro de mapa
+nao aparece erro de speed mask
+/controller_cmd_vel recebe comandos do controller
+/cmd_vel recebe comandos suavizados
+```
+
+### 3. Grafo No RViz
+
+```bash
+ros2 run sim_bot graph_visualizer
+```
+
+Validar:
+
+```text
+/route_graph_markers aparece no RViz
+nos e arestas ficam alinhados ao mapa
+IDs aparecem corretamente
+```
+
+### 4. Rota Por ID
 
 ```bash
 ros2 run sim_bot route_to_poses --ros-args \
@@ -357,43 +385,89 @@ ros2 run sim_bot route_to_poses --ros-args \
   -p goal_id:=17
 ```
 
-Esse comando chama `/compute_route` usando IDs do grafo e envia o caminho
-retornado para `/follow_path`.
-
-Arquivos principais deste fluxo:
+Validar:
 
 ```text
-launch/sim_manager.launch.py
-launch/sim_essentials.launch.py
-launch/sim_navigation.launch.py
-nav_hub/launch/route_graph/sim_nav_graph.launch.py
-nav_hub/config/sim_nav_params.yaml
-config/launch_params.yaml
-nav_hub/btree/nav_on_route_graph_oregon.xml
-nav_hub/graphs/aceleradoras.json
-scripts/route_to_poses.py
-scripts/graph_visualizer.py
-nav_hub/maps/aceleradora_speed_mask.yaml
+route_server retorna caminho
+FollowPath recebe o caminho
+robo executa a rota
+```
+
+### 5. Speed Filter
+
+Enviar o robo para passar pela area pintada da speed mask.
+
+Validar:
+
+```text
+velocidade reduz na area marcada
+fora da area, velocidade volta ao normal
+```
+
+## Estrutura Atual Do Pacote
+
+```text
+sim_bot/
+  config/
+    launch_params.yaml     Perfil principal da simulacao.
+    gz_bridge.yaml         Bridge ROS 2 <-> Gazebo.
+    joy_params.yaml        Parametros do joystick.
+    slam_params.yaml       Parametros do slam_toolbox.
+    nav_params.yaml        Referencia antiga/base simples de Nav2.
+
+  description/
+    palmares_bot.urdf.xacro
+    palmares_lidar.xacro
+    common.xacro
+    sensores auxiliares
+
+  launch/
+    sim_manager.launch.py      Orquestrador principal.
+    sim_essentials.launch.py   Gazebo, spawn, bridge, RViz e robot_state_publisher.
+    sim_navigation.launch.py   Chama SLAM e/ou nav_hub sim_nav_graph.
+    slam.launch.py             SLAM opcional.
+    teleop.launch.py           Joystick opcional.
+
+  scripts/
+    graph_visualizer.py    Publica markers do grafo no RViz.
+    route_to_poses.py      Calcula rota por ID e envia ao Nav2.
+
+  worlds/
+    aceleradora.world
+
+  models/
+    aceleradora_world/
+
+  rviz/
+    bot.rviz
+```
+
+Estrutura usada do `nav_hub`:
+
+```text
+nav_hub/
+  launch/route_graph/sim_nav_graph.launch.py
+  config/sim_nav_params.yaml
+  maps/aceleradora.yaml
+  maps/aceleradora.pgm
+  maps/aceleradora_speed_mask.yaml
+  maps/aceleradora_speed_mask.pgm
+  graphs/aceleradoras.json
+  btree/nav_on_route_graph_oregon.xml
 ```
 
 ## Observacoes
 
-- Na primeira execucao, o Gazebo pode baixar modelos do Gazebo Fuel usados no mundo `test.world`.
-- Se o pacote nao for encontrado, confira se o workspace correto foi carregado com `source ~/sim_ws/install/setup.bash`.
-- Se outro workspace estiver no seu `.bashrc`, carregue primeiro `/opt/ros/jazzy/setup.bash` e depois `~/sim_ws/install/setup.bash`.
-- Novas alteracoes devem ser revisadas por Pull Request para a branch `dev` antes de serem integradas na `main`.
+- O comando principal deve ser executado pelo `sim_manager.launch.py`.
+- `config/launch_params.yaml` controla o perfil padrao da simulacao.
+- Mapa, grafo, speed mask e BT ficam no `nav_hub`.
+- O `sim_bot` e a camada de simulacao; o `nav_hub` e a camada de navegacao.
+- Para Nav2, mantenha `joy: false` para evitar comando manual e autonomo ao
+  mesmo tempo em `/cmd_vel`.
+- Se alterar arquivos de launch, config ou mapa, recompile e rode `source`:
 
-## Modificacoes
-
-- Atualizado para ROS 2 Jazzy, Ubuntu 24.04 e Gazebo Sim 8.
-- Dependencias do `package.xml` foram trocadas de pacotes fixos `ros-humble-*` para nomes genericos de pacotes ROS 2, permitindo resolucao correta via `rosdep` no Jazzy.
-- Mundos SDF foram ajustados de plugins antigos `ignition-gazebo-*` para plugins `gz-sim-*`.
-- Caminhos locais de modelos do Gazebo Fuel foram removidos do mundo `test.world` e substituidos por URIs publicas.
-- Parametros do Nav2 foram atualizados para nomes de plugins compativeis com Jazzy.
-- Frames das cameras foram ajustados para corrigir a exibicao do `/camera/points` no RViz: `camera_link_optical` agora fica alinhado com `camera_link`, e a depth camera publica a nuvem usando `camera_link_optical`.
-- Adicionado o modelo `aceleradora_world` com STL local, world `aceleradora.world` e configuracao do `GZ_SIM_RESOURCE_PATH` nos launch files para resolver URIs `model://` no Gazebo.
-- Adicionado suporte a navegacao com mapa existente via `map_server.yaml_filename` no arquivo de parametros Nav2, iniciando `nav2_map_server`, `nav2_amcl` e `lifecycle_manager_localization`.
-- Adicionadas dependencias explicitas `nav2_map_server` e `nav2_amcl` no `package.xml`.
-- Ajustado o Nav2 para publicar `/cmd_vel` como `geometry_msgs/msg/Twist` com `enable_stamped_cmd_vel: false`, evitando conflito com `TwistStamped` no bridge do Gazebo.
-- Removido o `twist_mux`; teleoperacao e Nav2 agora publicam diretamente em `/cmd_vel`. Use apenas um modo por vez, por exemplo `joy:=False` ao rodar com Nav2.
-- Adicionado `nav_hub/launch/route_graph/sim_nav_graph.launch.py` como launch de navegacao da simulacao, mantendo a estrutura mais proxima da Oregon sem depender de hardware real.
+```bash
+cd ~/sim_ws
+colcon build --packages-select nav_hub sim_bot
+source install/setup.bash
+```
