@@ -124,14 +124,17 @@ def generate_launch_description():
     )
 
     # ── Spawn palmares_bot ────────────────────────────────────────────────
+    # Spawns at world(1.0, 0.0) = 1 m in front of dock (staging area).
+    # This makes odom(0,0) = staging, odom(1,0) = dock. Robot faces +X (dock).
     spawn_palmares_bot = Node(
         package='ros_gz_sim',
         executable='create',
         arguments=['-topic', 'robot_description',
                    '-name', 'palmares_bot',
-                   '-x', '-3.0',
-                   '-y', '-3.0',
-                   '-z', '0.15'],
+                   '-x', '1.0',
+                   '-y', '0.0',
+                   '-z', '0.15',
+                   '-Y', '0.0'],
         output='screen'
     )
 

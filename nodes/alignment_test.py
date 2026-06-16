@@ -14,7 +14,7 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
 
-DOCK_Y_ODOM = 3.0
+DOCK_Y_ODOM = 0.0   # dock em odom(1,0) — spawn world(1,0)=odom(0,0)
 DOCK_YAW    = 0.0
 DOCK_Z      = 0.0
 TOL_Y       = 0.02

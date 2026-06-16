@@ -1,77 +1,116 @@
 #!/usr/bin/env python3
 """
-charging_manager.py
-===================
-Orchestrates the full autonomous charging cycle for palmares_bot.
+charging_manager.py — palmares_bot: bateria, fila de tarefas e dock como home.
 
-Cycle:
-  1. /go_charge (std_msgs/Empty) triggers the sequence
-  2. NavigateToPose → staging area 1 m in front of dock (1.0, 0.0, yaw=0)
-  3. DockRobot      → dock_pose_estimator guides approach via ArUco + LiDAR
-  4. 15 s charging timer
-  5. UndockRobot    → robot backs away to staging
-  6. NavigateToPose → return to home corner (−3.0, −3.0)
+Ciclo:
+  STARTUP (15 s) → HOME_CHARGING (dock simulado)
+  Tarefa na fila + bat ≥ 40 % → UNDOCKING → GOING_TO_TASK → EXECUTING_TASK → HOME
+  bat < 20 % após tarefa → retorna imediatamente
+  bat ≤  5 % durante tarefa → emergência, aborta e retorna
 
-Publishes /charging_manager/state (std_msgs/String) for monitoring.
+Retorno ao dock:
+  _start_returning_home → DockRobot(navigate_to_staging_pose=True)
+  O servidor de docking navega até o staging e faz a abordagem precisa.
+
+Tópico manual: publique em /go_charge (std_msgs/Empty) para forçar retorno.
+
+Bateria:
+  Drena  0.5 %/s fora de HOME_CHARGING →  100→0 em 200 s
+  Carrega 1.0 %/s em HOME_CHARGING      →    0→100 em 100 s
 """
 
 import math
 import rclpy
 import rclpy.time
+from collections import deque
+from dataclasses import dataclass
+from typing import Optional, Deque, List
+
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-from std_msgs.msg import Empty, String
+from std_msgs.msg import String, Float32, Empty
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose, DockRobot, UndockRobot
 
 
-# ── State machine states ───────────────────────────────────────────────────────
-IDLE                  = 'IDLE'
+# ── Estados ────────────────────────────────────────────────────────────────────
+STARTUP               = 'STARTUP'
 NAVIGATING_TO_STAGING = 'NAVIGATING_TO_STAGING'
-CENTERING             = 'CENTERING'   # lateral correction before docking approach
+CENTERING             = 'CENTERING'
 DOCKING               = 'DOCKING'
-CHARGING              = 'CHARGING'
+HOME_CHARGING         = 'HOME_CHARGING'
 UNDOCKING             = 'UNDOCKING'
-RETURNING             = 'RETURNING'
+GOING_TO_TASK         = 'GOING_TO_TASK'
+EXECUTING_TASK        = 'EXECUTING_TASK'
+RETURNING_HOME        = 'RETURNING_HOME'
 
-# Lateral correction parameters
-CENTERING_SAMPLE_TIME  = 2.0   # s to collect detected_dock_pose samples
-CENTERING_DEAD_BAND    = 0.05  # m — skip correction if error < 5 cm
-CENTERING_MAX_CORRECT  = 0.30  # m — clamp correction to avoid over-steering
+# ── Bateria ────────────────────────────────────────────────────────────────────
+BATT_DRAIN    = 0.5   # %/s fora de casa  → 100→0 em 200 s
+BATT_CHARGE   = 1.0   # %/s em HOME_CHARGING → 0→100 em 100 s
+MIN_FOR_TASK  = 40.0  # % mínimo para aceitar tarefa da fila
+LOW_AFTER     = 20.0  # % → forçar retorno após tarefa
+EMERGENCY     = 5.0   # % → abortar tarefa imediatamente
 
-# ── Key poses (odom frame) ─────────────────────────────────────────────────────
-# Robot spawns at world (-3,-3) = odom (0,0). Dock at world (2,0) = odom (5,3).
-# Staging: 1 m before dock face in odom X direction → odom (4, 3).
-STAGING_X   =  4.0
-STAGING_Y   =  2.97   # 3 cm right of dock centre (odom Y=3.0 → 2.97)
-STAGING_YAW =  0.0    # face the dock (dock is at odom (5,3), staging at (4,3) → +X)
+# ── Dock / Staging ─────────────────────────────────────────────────────────────
+# Robot spawns at world(1,0) = odom(0,0) = staging. Dock at world(2,0) = odom(1,0).
+STAGING_X        = 0.0
+STAGING_Y        = 0.0
+STAGING_YAW      = 0.0
+DOCK_MAX_FAILS   = 4    # tentativas totais antes de forçar HOME_CHARGING
 
-# Home: near spawn odom (0,0). Yaw faces away from dock (lower-left direction).
-HOME_X   =  0.0
-HOME_Y   =  0.0
-HOME_YAW = -2.356     # ≈ -135° → faces away from dock toward spawn corner
+# Alinhamento pós-docking — robô só entra em HOME_CHARGING se estiver reto
+DOCK_Y_ODOM    = 0.0   # y esperado do robô dockado (odom)
+ALIGN_TOL_Y    = 0.05  # m   — 5 cm lateral
+ALIGN_TOL_YAW  = 0.17  # rad — ≈ 10° angular
 
-CHARGE_SECONDS = 15.0
+CTR_SAMPLE_S     = 2.0
+CTR_DEAD_BAND    = 0.05
+CTR_MAX_CORR     = 0.30
 
-# ── Alignment check after docking ─────────────────────────────────────────────
-DOCK_Y_ODOM     = 2.97             # expected robot Y when docked (odom frame)
-ALIGN_TOL_Y     = 0.02             # m — max lateral error accepted
-ALIGN_TOL_YAW   = math.radians(1.0)  # rad — max yaw error (1 degree)
-DOCK_MAX_RETRIES = 3               # max realign attempts before aborting
+# Reverse para undocking simples (sem UndockRobot action)
+UNDOCK_SPEED     = -0.15   # m/s
+UNDOCK_DURATION  = 2.0     # s  →  recua ~30 cm
+
+# ── Rotas de patrulha (x, y, yaw_rad em odom) ────────────────────────────────
+# Coordenadas no novo frame: spawn odom(0,0) = world(1,0). Área livre: x<0.
+# Obstáculos (odom): box1(-2.5,1.5), cyl1(-3,-1), box2(-0.8,2.5),
+#                    cyl2(-1.8,-1.8), box3(-3.5,0.5), box4(-2,-2.5)
+PATROL_ROUTES: dict = {
+    'A': [(-1.5, 1.0, 0.0),  (-2.0, 0.0, 1.57),  (-1.5, -1.0, 3.14)],
+    'B': [(-1.0, -0.5, 0.0), (-2.5, -0.5, 1.57), (-2.0,  1.0, 0.0) ],
+    'C': [(-2.0,  0.5, 0.0), (-1.0,  1.5, -1.57),(-1.5, -0.5, 0.0) ],
+}
+
+TASK_WAIT_S = {'goto_pose': 2, 'inspect': 5, 'deliver': 3, 'patrol': 0}
+
+AUTOSTART_DELAY = 15.0  # s após startup (aguarda Nav2 e docking server)
+
+
+@dataclass
+class Task:
+    type:  str
+    pose:  Optional[PoseStamped] = None
+    route: str = ''
 
 
 def _make_pose(x: float, y: float, yaw: float) -> PoseStamped:
     ps = PoseStamped()
-    ps.header.frame_id  = 'odom'
-    ps.pose.position.x  = x
-    ps.pose.position.y  = y
-    ps.pose.position.z  = 0.0
+    ps.header.frame_id    = 'odom'
+    ps.pose.position.x    = x
+    ps.pose.position.y    = y
     ps.pose.orientation.z = math.sin(yaw / 2.0)
     ps.pose.orientation.w = math.cos(yaw / 2.0)
     return ps
+
+
+def _nav_goal(pose: PoseStamped) -> NavigateToPose.Goal:
+    g = NavigateToPose.Goal()
+    g.pose = pose
+    g.pose.header.stamp = rclpy.time.Time().to_msg()
+    return g
 
 
 class ChargingManager(Node):
@@ -79,355 +118,366 @@ class ChargingManager(Node):
     def __init__(self):
         super().__init__('charging_manager')
 
-        self._state = IDLE
-        self._charge_timer = None
+        self._state             = STARTUP
+        self._battery           = 100.0
+        self._tick_count        = 0
+        self._queue: Deque[Task]     = deque()
+        self._task: Optional[Task]   = None
+        self._patrol_wps: List[PoseStamped] = []
+        self._patrol_idx        = 0
+        self._dock_retries      = 0
         self._centering_samples: list = []
-        self._centering_timer  = None
-        self._centering_sub    = None
+        self._centering_timer   = None
+        self._centering_sub     = None
+        self._robot_y: Optional[float]   = None
+        self._robot_yaw: Optional[float] = None
 
-        # Alignment tracking
-        self._robot_y   : float | None = None
-        self._robot_yaw : float | None = None
-        self._dock_retries  = 0
-        self._after_undock  = RETURNING   # RETURNING (normal) or CENTERING (retry)
-
-        # Use ReentrantCallbackGroup so action callbacks don't block subscribers
         cb = ReentrantCallbackGroup()
 
-        # ── Subscribers ────────────────────────────────────────────────────
-        self.create_subscription(Empty, '/go_charge', self._go_charge_cb, 10,
-                                 callback_group=cb)
-        self.create_subscription(Odometry, '/odom', self._odom_cb, 10,
-                                 callback_group=cb)
+        self.create_subscription(Odometry,    '/odom',           self._odom_cb,      10, callback_group=cb)
+        self.create_subscription(PoseStamped, '/task/goto_pose', self._cb_goto,      10, callback_group=cb)
+        self.create_subscription(PoseStamped, '/task/inspect',   self._cb_inspect,   10, callback_group=cb)
+        self.create_subscription(String,      '/task/patrol',    self._cb_patrol,    10, callback_group=cb)
+        self.create_subscription(PoseStamped, '/task/deliver',   self._cb_deliver,   10, callback_group=cb)
+        self.create_subscription(Empty,       '/go_charge',      self._cb_go_charge, 10, callback_group=cb)
 
-        # ── Publishers ─────────────────────────────────────────────────────
-        self._state_pub = self.create_publisher(String, '/charging_manager/state', 10)
-        self._vel_pub   = self.create_publisher(Twist,  '/cmd_vel', 10)
+        self._state_pub   = self.create_publisher(String,  '/charging_manager/state', 10)
+        self._battery_pub = self.create_publisher(Float32, '/battery_level', 10)
+        self._vel_pub     = self.create_publisher(Twist,   '/cmd_vel', 10)
 
-        # ── Action clients ─────────────────────────────────────────────────
-        self._nav_client   = ActionClient(self, NavigateToPose, 'navigate_to_pose',
-                                          callback_group=cb)
-        self._dock_client  = ActionClient(self, DockRobot,      'dock_robot',
-                                          callback_group=cb)
-        self._undock_client = ActionClient(self, UndockRobot,   'undock_robot',
-                                           callback_group=cb)
+        self._nav    = ActionClient(self, NavigateToPose, 'navigate_to_pose', callback_group=cb)
+        self._dockc  = ActionClient(self, DockRobot,      'dock_robot',       callback_group=cb)
+        self._undockc = ActionClient(self, UndockRobot,   'undock_robot',     callback_group=cb)
 
-        self.get_logger().info('ChargingManager ready. Publish /go_charge to start.')
+        self.create_timer(1.0, self._battery_tick)
+        self._once(AUTOSTART_DELAY, self._autostart)
+        self.get_logger().info(
+            f'ChargingManager pronto. Vai para dock em {AUTOSTART_DELAY:.0f} s.')
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Helpers
-    # ─────────────────────────────────────────────────────────────────────────
-    def _set_state(self, state: str):
-        self._state = state
-        msg = String()
-        msg.data = state
-        self._state_pub.publish(msg)
-        self.get_logger().info(f'[ChargingManager] → {state}')
+    # ── Helpers ────────────────────────────────────────────────────────────────
+    def _once(self, delay: float, fn):
+        h = [None]
+        def _cb(): h[0].cancel(); fn()
+        h[0] = self.create_timer(delay, _cb)
 
-    def _abort(self, reason: str):
-        self.get_logger().error(f'[ChargingManager] ABORTED: {reason}')
-        self._set_state(IDLE)
+    def _set_state(self, s: str):
+        self._state = s
+        m = String(); m.data = s
+        self._state_pub.publish(m)
+        self.get_logger().info(f'→ {s}  (bat={self._battery:.1f}%)')
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 1 — trigger
-    # ─────────────────────────────────────────────────────────────────────────
     def _odom_cb(self, msg: Odometry):
         self._robot_y = msg.pose.pose.position.y
-        qz = msg.pose.pose.orientation.z
-        qw = msg.pose.pose.orientation.w
+        qz, qw = msg.pose.pose.orientation.z, msg.pose.pose.orientation.w
         self._robot_yaw = 2.0 * math.atan2(qz, qw)
 
-    def _is_aligned(self) -> bool:
-        if self._robot_y is None or self._robot_yaw is None:
-            return True   # no data yet — give benefit of the doubt
-        y_err   = abs(self._robot_y - DOCK_Y_ODOM)
-        yaw_err = abs((self._robot_yaw + math.pi) % (2 * math.pi) - math.pi)
-        return y_err <= ALIGN_TOL_Y and yaw_err <= ALIGN_TOL_YAW
+    # _is_aligned removido — confiamos no docking server (DockRobot status=4 = ok)
 
-    def _go_charge_cb(self, _msg: Empty):
-        if self._state != IDLE:
-            self.get_logger().warn(
-                f'Received /go_charge but already in state {self._state}, ignoring.')
+    # ── Bateria ────────────────────────────────────────────────────────────────
+    def _battery_tick(self):
+        self._tick_count += 1
+
+        if self._state == HOME_CHARGING:
+            self._battery = min(100.0, self._battery + BATT_CHARGE)
+        elif self._state != STARTUP:
+            self._battery = max(0.0, self._battery - BATT_DRAIN)
+
+        m = Float32(); m.data = float(self._battery)
+        self._battery_pub.publish(m)
+
+        # Republica estado a cada tick para que 'ros2 topic echo --once' funcione
+        s = String(); s.data = self._state
+        self._state_pub.publish(s)
+
+        # Log a cada 5 s
+        if self._tick_count % 5 == 0:
+            pct = self._battery
+            bar = '█' * int(pct // 10) + '░' * (10 - int(pct // 10))
+            self.get_logger().info(
+                f'[bat {bar} {pct:5.1f}%]  {self._state}  fila={len(self._queue)}')
+
+        # Emergência durante tarefa
+        if (self._battery <= EMERGENCY and
+                self._state in (GOING_TO_TASK, EXECUTING_TASK)):
+            self.get_logger().error(
+                f'BATERIA CRÍTICA {self._battery:.1f}% — abortando tarefa!')
+            self._task = None
+            self._start_returning_home()
             return
-        self.get_logger().info('Received /go_charge — starting charging cycle.')
-        self._dock_retries = 0
-        self._navigate_to_staging()
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 2 — navigate to staging area
-    # ─────────────────────────────────────────────────────────────────────────
-    def _navigate_to_staging(self):
-        self._set_state(NAVIGATING_TO_STAGING)
+        # Processar fila quando em HOME_CHARGING com bateria suficiente
+        if self._state == HOME_CHARGING and self._battery >= MIN_FOR_TASK:
+            self._check_queue()
 
-        if not self._nav_client.wait_for_server(timeout_sec=10.0):
-            self._abort('NavigateToPose action server not available')
-            return
-
-        goal = NavigateToPose.Goal()
-        goal.pose = _make_pose(STAGING_X, STAGING_Y, STAGING_YAW)
-        # Use Time(0) so bt_navigator uses the latest available TF.
-        # Using get_clock().now() causes "Initial robot pose not available"
-        # when the TF buffer was recently cleared by a SLAM jump-back-in-time.
-        goal.pose.header.stamp = rclpy.time.Time().to_msg()
-
+    # ── Fila de tarefas ────────────────────────────────────────────────────────
+    def _enqueue(self, task: Task):
+        self._queue.append(task)
         self.get_logger().info(
-            f'Navigating to staging pose ({STAGING_X}, {STAGING_Y})...')
-        future = self._nav_client.send_goal_async(goal)
-        future.add_done_callback(self._staging_goal_accepted_cb)
+            f'[FILA +{task.type}]  total={len(self._queue)}  bat={self._battery:.1f}%  '
+            f'estado={self._state}')
 
-    def _staging_goal_accepted_cb(self, future):
-        handle = future.result()
-        if not handle.accepted:
-            self._abort('NavigateToPose goal rejected')
-            return
-        handle.get_result_async().add_done_callback(self._staging_result_cb)
+    def _check_queue(self):
+        # _task is None garante que não fazemos pop duplo enquanto _start_undocking retenta
+        if (self._queue and self._task is None
+                and self._state == HOME_CHARGING
+                and self._battery >= MIN_FOR_TASK):
+            self._task = self._queue.popleft()
+            self.get_logger().info(
+                f'[FILA] Aceitando {self._task.type}  bat={self._battery:.1f}%')
+            self._start_undocking()
 
-    def _staging_result_cb(self, future):
-        result = future.result()
-        status = result.status
-        # action_msgs/GoalStatus: SUCCEEDED = 4
-        if status != 4:
-            self._abort(f'NavigateToPose failed with status {status}')
+    def _cb_goto(self,    m: PoseStamped): self._enqueue(Task('goto_pose', pose=m))
+    def _cb_inspect(self, m: PoseStamped): self._enqueue(Task('inspect',   pose=m))
+    def _cb_deliver(self, m: PoseStamped): self._enqueue(Task('deliver',   pose=m))
+    def _cb_patrol(self,  m: String):
+        r = m.data.strip().upper()
+        if r not in PATROL_ROUTES:
+            self.get_logger().warn(
+                f'Rota desconhecida: {r!r}  opções={list(PATROL_ROUTES)}')
             return
-        self.get_logger().info('Reached staging area. Starting lateral centering.')
+        self._enqueue(Task('patrol', route=r))
+
+    def _cb_go_charge(self, _: Empty):
+        if self._state in (HOME_CHARGING, DOCKING, RETURNING_HOME):
+            self.get_logger().info('/go_charge recebido — já em retorno/carga, ignorando.')
+            return
+        self.get_logger().info('/go_charge recebido — abortando tarefa e retornando ao dock.')
+        self._task = None
+        self._start_returning_home()
+
+    # ── STARTUP ────────────────────────────────────────────────────────────────
+    def _autostart(self):
+        if self._state == STARTUP:
+            self.get_logger().info(
+                'Iniciando em HOME_CHARGING (dock simulado desde o spawn). '
+                'Aceita tarefas quando bat ≥ 40%.')
+            self._set_state(HOME_CHARGING)
+
+    # ── NAVIGATING_TO_STAGING ─────────────────────────────────────────────────
+    def _navigate_to_staging(self):
+        # Não muda estado antes de confirmar servidor — evita drain de bateria enquanto Nav2 sobe
+        if not self._nav.server_is_ready():
+            self.get_logger().warn('Nav2 não disponível — aguardando 3 s')
+            self._once(3.0, self._navigate_to_staging)
+            return
+        self._set_state(NAVIGATING_TO_STAGING)
+        self._nav.send_goal_async(
+            _nav_goal(_make_pose(STAGING_X, STAGING_Y, STAGING_YAW))
+        ).add_done_callback(self._staging_acc)
+
+    def _staging_acc(self, f):
+        h = f.result()
+        if not h.accepted:
+            self._once(2.0, self._navigate_to_staging); return
+        h.get_result_async().add_done_callback(self._staging_res)
+
+    def _staging_res(self, f):
+        if f.result().status != 4:
+            self.get_logger().warn('Staging falhou — retry 3 s')
+            self._once(3.0, self._navigate_to_staging); return
         self._start_centering()
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 2b — lateral centering (pre-align on dock face before approach)
-    # ─────────────────────────────────────────────────────────────────────────
+    # ── CENTERING ─────────────────────────────────────────────────────────────
     def _start_centering(self):
         self._set_state(CENTERING)
         self._centering_samples = []
         self._centering_sub = self.create_subscription(
-            PoseStamped, '/detected_dock_pose', self._centering_pose_cb, 10)
-        # Collect for CENTERING_SAMPLE_TIME seconds then apply correction
-        self._centering_timer = self.create_timer(
-            CENTERING_SAMPLE_TIME, self._centering_done)
+            PoseStamped, '/detected_dock_pose', self._ctr_pose_cb, 10)
+        self._centering_timer = self.create_timer(CTR_SAMPLE_S, self._centering_done)
 
-    def _centering_pose_cb(self, msg: PoseStamped):
-        if self._state != CENTERING:
-            return
-        self._centering_samples.append(msg.pose.position.y)
+    def _ctr_pose_cb(self, msg: PoseStamped):
+        if self._state == CENTERING:
+            self._centering_samples.append(msg.pose.position.y)
 
     def _centering_done(self):
-        self._centering_timer.cancel()
-        self._centering_timer = None
-        if self._centering_sub is not None:
+        self._centering_timer.cancel(); self._centering_timer = None
+        if self._centering_sub:
             self.destroy_subscription(self._centering_sub)
             self._centering_sub = None
-
         if not self._centering_samples:
-            self.get_logger().warn('No dock pose samples during centering — skipping correction.')
-            self._start_docking()
-            return
+            self.get_logger().warn('Sem amostras — pulando centering.')
+            self._start_docking(); return
+        err = sum(self._centering_samples) / len(self._centering_samples) - STAGING_Y
+        if abs(err) < CTR_DEAD_BAND:
+            self._start_docking(); return
+        cy = STAGING_Y + max(-CTR_MAX_CORR, min(CTR_MAX_CORR, err))
+        self._nav.send_goal_async(
+            _nav_goal(_make_pose(STAGING_X, cy, STAGING_YAW))
+        ).add_done_callback(self._ctr_nav_cb)
 
-        dock_y = sum(self._centering_samples) / len(self._centering_samples)
-        error  = dock_y - STAGING_Y
-        self.get_logger().info(
-            f'Centering: dock_y={dock_y:.3f} m, error={error:+.3f} m '
-            f'(n={len(self._centering_samples)})')
+    def _ctr_nav_cb(self, f):
+        h = f.result()
+        if not h.accepted:
+            self._start_docking(); return
+        h.get_result_async().add_done_callback(lambda _: self._start_docking())
 
-        if abs(error) < CENTERING_DEAD_BAND:
-            self.get_logger().info('Lateral error within dead-band — no correction needed.')
-            self._start_docking()
-            return
-
-        # Clamp and apply correction: navigate to corrected Y at staging X
-        corrected_y = STAGING_Y + max(-CENTERING_MAX_CORRECT,
-                                       min(CENTERING_MAX_CORRECT, error))
-        self.get_logger().info(f'Correcting lateral position to y={corrected_y:.3f} m')
-
-        goal = NavigateToPose.Goal()
-        goal.pose = _make_pose(STAGING_X, corrected_y, STAGING_YAW)
-        goal.pose.header.stamp = rclpy.time.Time().to_msg()
-        future = self._nav_client.send_goal_async(goal)
-        future.add_done_callback(self._centering_nav_accepted_cb)
-
-    def _centering_nav_accepted_cb(self, future):
-        handle = future.result()
-        if not handle.accepted:
-            self.get_logger().warn('Centering correction goal rejected — proceeding to dock.')
-            self._start_docking()
-            return
-        handle.get_result_async().add_done_callback(self._centering_nav_result_cb)
-
-    def _centering_nav_result_cb(self, future):
-        result = future.result()
-        if result.status != 4:
-            self.get_logger().warn(
-                f'Centering nav ended with status {result.status} — proceeding to dock.')
-        else:
-            self.get_logger().info('Lateral centering correction complete.')
-        self._start_docking()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 3 — dock
-    # ─────────────────────────────────────────────────────────────────────────
+    # ── DOCKING ───────────────────────────────────────────────────────────────
     def _start_docking(self):
+        if not self._dockc.server_is_ready():
+            self.get_logger().warn('DockRobot não disponível — aguardando 2 s')
+            self._once(2.0, self._start_docking)
+            return
         self._set_state(DOCKING)
+        g = DockRobot.Goal()
+        g.use_dock_id = True
+        g.dock_id = 'base_carregamento'
+        g.navigate_to_staging_pose = True   # servidor navega + faz abordagem precisa
+        self._dockc.send_goal_async(g).add_done_callback(self._dock_acc)
 
-        if not self._dock_client.wait_for_server(timeout_sec=10.0):
-            self._abort('DockRobot action server not available')
+    def _dock_acc(self, f):
+        h = f.result()
+        if not h.accepted:
+            self._once(2.0, self._start_docking); return
+        h.get_result_async().add_done_callback(self._dock_res)
+
+    def _dock_res(self, f):
+        if f.result().status != 4:
+            self._dock_retries += 1
+            if self._dock_retries >= DOCK_MAX_FAILS:
+                self.get_logger().warn(
+                    f'DockRobot falhou {DOCK_MAX_FAILS}× — forçando HOME_CHARGING.')
+                self._dock_retries = 0
+                self._set_state(HOME_CHARGING)
+            else:
+                self.get_logger().warn(
+                    f'Docking falhou ({self._dock_retries}/{DOCK_MAX_FAILS}) — retry em 3 s')
+                self._once(3.0, self._start_docking)
             return
 
-        goal = DockRobot.Goal()
-        goal.use_dock_id              = True
-        goal.dock_id                  = 'base_carregamento'
-        goal.navigate_to_staging_pose = False  # already at staging
+        # DockRobot declarou sucesso — verificar alinhamento (Y e yaw)
+        y_err   = abs((self._robot_y  or 0.0) - DOCK_Y_ODOM)
+        yaw_err = abs(self._robot_yaw or 0.0)
+        aligned = y_err <= ALIGN_TOL_Y and yaw_err <= ALIGN_TOL_YAW
 
-        self.get_logger().info('Sending DockRobot goal...')
-        future = self._dock_client.send_goal_async(goal)
-        future.add_done_callback(self._dock_goal_accepted_cb)
-
-    def _dock_goal_accepted_cb(self, future):
-        handle = future.result()
-        if not handle.accepted:
-            self._abort('DockRobot goal rejected')
-            return
-        handle.get_result_async().add_done_callback(self._dock_result_cb)
-
-    def _dock_result_cb(self, future):
-        result = future.result()
-        status = result.status
-        if status != 4:
-            error_code = result.result.error_code if result.result else '?'
-            self._abort(f'DockRobot failed — status={status}, error_code={error_code}')
-            return
-
-        y_err   = abs((self._robot_y or 0.0) - DOCK_Y_ODOM)
-        yaw_err = math.degrees(abs((self._robot_yaw or 0.0 + math.pi) % (2 * math.pi) - math.pi))
-        if not self._is_aligned():
+        if not aligned:
             self._dock_retries += 1
             self.get_logger().warn(
-                f'Docked but misaligned — y_err={y_err:.3f} m (tol {ALIGN_TOL_Y} m), '
-                f'yaw_err={yaw_err:.1f}° (tol 1°) — '
-                f'retry {self._dock_retries}/{DOCK_MAX_RETRIES}')
-            if self._dock_retries >= DOCK_MAX_RETRIES:
-                self._abort(f'Alignment failed after {DOCK_MAX_RETRIES} attempts — aborting')
-                return
-            self._after_undock = CENTERING
-            self._start_undocking()
+                f'Robô torto após docking  y_err={y_err:.3f}m '
+                f'yaw={math.degrees(yaw_err):.1f}°  '
+                f'({self._dock_retries}/{DOCK_MAX_FAILS}) — retry em 3 s')
+            if self._dock_retries >= DOCK_MAX_FAILS:
+                self.get_logger().warn('Limite de realinhamentos — forçando HOME_CHARGING.')
+                self._dock_retries = 0
+                self._set_state(HOME_CHARGING)
+            else:
+                self._once(3.0, self._start_docking)
             return
 
-        self.get_logger().info(
-            f'Docked and aligned ✓  y_err={y_err:.3f} m  yaw_err={yaw_err:.1f}°  '
-            f'Starting charge timer.')
         self._dock_retries = 0
-        self._after_undock = RETURNING
-        self._start_charging()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 4 — charge for 15 s
-    # ─────────────────────────────────────────────────────────────────────────
-    def _start_charging(self):
-        self._set_state(CHARGING)
-        self._charge_elapsed = 0
-        self._charge_timer = self.create_timer(1.0, self._charging_tick)
-
-    def _charging_tick(self):
-        self._charge_elapsed += 1
-        self._vel_pub.publish(Twist())   # keep wheels stopped during charge
         self.get_logger().info(
-            f'Charging... {self._charge_elapsed}/{int(CHARGE_SECONDS)} s')
-        if self._charge_elapsed >= int(CHARGE_SECONDS):
-            self._charge_timer.cancel()
-            self._charge_timer = None
-            self.get_logger().info('Charge complete. Undocking.')
-            self._start_undocking()
+            f'Dockado e alinhado ✓  y_err={y_err:.3f}m  '
+            f'yaw={math.degrees(yaw_err):.1f}°  bat={self._battery:.1f}%')
+        self._set_state(HOME_CHARGING)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 5 — undock
-    # ─────────────────────────────────────────────────────────────────────────
+    # ── UNDOCKING → tarefa (reverse simples, sem ação ROS) ───────────────────
     def _start_undocking(self):
         self._set_state(UNDOCKING)
-
-        if not self._undock_client.wait_for_server(timeout_sec=10.0):
-            self._abort('UndockRobot action server not available')
-            return
-
-        goal = UndockRobot.Goal()
-        goal.dock_type = 'charging_dock'
-
-        self.get_logger().info('Sending UndockRobot goal...')
-        future = self._undock_client.send_goal_async(goal)
-        future.add_done_callback(self._undock_goal_accepted_cb)
-
-    def _undock_goal_accepted_cb(self, future):
-        handle = future.result()
-        if not handle.accepted:
-            self._abort('UndockRobot goal rejected')
-            return
-        handle.get_result_async().add_done_callback(self._undock_result_cb)
-
-    def _undock_result_cb(self, future):
-        result = future.result()
-        status = result.status
-        if status != 4:
-            self._abort(f'UndockRobot failed with status {status}')
-            return
-        if self._after_undock == CENTERING:
-            self.get_logger().info('Undocked for realignment — restarting centering.')
-            self._after_undock = RETURNING
-            self._start_centering()
-        else:
-            self.get_logger().info('Undocking successful. Returning home.')
-            self._return_home()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 6 — return to home corner
-    # ─────────────────────────────────────────────────────────────────────────
-    def _return_home(self):
-        self._set_state(RETURNING)
-
-        if not self._nav_client.wait_for_server(timeout_sec=10.0):
-            self._abort('NavigateToPose action server not available (return)')
-            return
-
-        goal = NavigateToPose.Goal()
-        goal.pose = _make_pose(HOME_X, HOME_Y, HOME_YAW)
-        goal.pose.header.stamp = rclpy.time.Time().to_msg()
-
-        self.get_logger().info(f'Navigating home ({HOME_X}, {HOME_Y})...')
-        future = self._nav_client.send_goal_async(goal)
-        future.add_done_callback(self._home_goal_accepted_cb)
-
-    def _home_goal_accepted_cb(self, future):
-        handle = future.result()
-        if not handle.accepted:
-            self._abort('Return NavigateToPose goal rejected')
-            return
-        handle.get_result_async().add_done_callback(self._home_result_cb)
-
-    def _home_result_cb(self, future):
-        result = future.result()
-        status = result.status
-        if status != 4:
-            self.get_logger().warn(f'Return navigation ended with status {status}')
-        else:
-            self.get_logger().info('Returned home successfully.')
-        self._set_state(IDLE)
         self.get_logger().info(
-            '\n' + '=' * 68 + '\n'
-            '  CICLO CONCLUÍDO — robô em IDLE\n'
-            '=' * 68 + '\n'
-            '\n'
-            '  Terminal 1 (já rodando — não fechar):\n'
-            '    cd ~/sim_ws && source install/setup.bash\n'
-            '    ros2 launch sim_bot palmares_bot.launch.py\n'
-            '\n'
-            '  Terminal 2 — disparar novo ciclo de carga:\n'
-            '    source ~/sim_ws/install/setup.bash\n'
-            "    ros2 topic pub --once /go_charge std_msgs/msg/Empty '{}'\n"
-            '\n'
-            '  Terminal 2 — monitorar estado do ciclo:\n'
-            '    ros2 topic echo /charging_manager/state\n'
-            '\n'
-            '  Terminal 2 — diagnóstico (opcional):\n'
-            '    ros2 topic echo /detected_dock_pose\n'
-            '    ros2 topic echo /odom --once\n'
-            '    ros2 topic hz /camera/image\n'
-            + '=' * 68
-        )
+            f'Recuando da dock ({abs(UNDOCK_SPEED):.2f} m/s × {UNDOCK_DURATION:.1f} s)…')
+        cmd = Twist()
+        cmd.linear.x = UNDOCK_SPEED
+        self._vel_pub.publish(cmd)
+        self._once(UNDOCK_DURATION, self._undock_done)
+
+    def _undock_done(self):
+        self._vel_pub.publish(Twist())   # para
+        self.get_logger().info('Undock completo — indo para tarefa.')
+        self._start_going_to_task()
+
+    # ── GOING_TO_TASK ─────────────────────────────────────────────────────────
+    def _start_going_to_task(self):
+        if self._task is None:
+            self._start_returning_home(); return
+        if not self._nav.server_is_ready():
+            self.get_logger().warn('Nav2 não disponível — aguardando 3 s para tarefa')
+            self._once(3.0, self._start_going_to_task); return
+        self._set_state(GOING_TO_TASK)
+        t = self._task
+        if t.type == 'patrol':
+            self._patrol_wps = [_make_pose(*wp) for wp in PATROL_ROUTES[t.route]]
+            self._patrol_idx = 0
+            self._next_patrol_wp()
+        elif t.pose:
+            self._nav.send_goal_async(
+                _nav_goal(t.pose)
+            ).add_done_callback(self._task_nav_acc)
+        else:
+            self._start_executing_task()
+
+    def _task_nav_acc(self, f):
+        h = f.result()
+        if not h.accepted:
+            self._once(2.0, self._start_going_to_task); return
+        h.get_result_async().add_done_callback(self._task_nav_res)
+
+    def _task_nav_res(self, f):
+        if f.result().status != 4:
+            self.get_logger().warn('Nav até tarefa falhou — retornando')
+            self._task = None; self._start_returning_home(); return
+        self._start_executing_task()
+
+    # ── PATROL ────────────────────────────────────────────────────────────────
+    def _next_patrol_wp(self):
+        if self._patrol_idx >= len(self._patrol_wps):
+            self.get_logger().info('Patrulha concluída.')
+            self._start_executing_task(); return
+        wp = self._patrol_wps[self._patrol_idx]
+        self._patrol_idx += 1
+        self.get_logger().info(
+            f'Patrol wp {self._patrol_idx}/{len(self._patrol_wps)}')
+        self._nav.send_goal_async(
+            _nav_goal(wp)
+        ).add_done_callback(self._patrol_wp_acc)
+
+    def _patrol_wp_acc(self, f):
+        h = f.result()
+        if not h.accepted:
+            self._next_patrol_wp(); return
+        h.get_result_async().add_done_callback(self._patrol_wp_res)
+
+    def _patrol_wp_res(self, f):
+        if f.result().status != 4:
+            self.get_logger().warn('Waypoint falhou — abortando patrulha')
+            self._finish_task(); return
+        self._next_patrol_wp()
+
+    # ── EXECUTING_TASK ────────────────────────────────────────────────────────
+    def _start_executing_task(self):
+        self._set_state(EXECUTING_TASK)
+        t = self._task
+        wait = TASK_WAIT_S.get(t.type if t else '', 0)
+        self.get_logger().info(
+            f'Executando {t.type if t else "?"} — aguardando {wait} s')
+        if wait > 0:
+            self._once(float(wait), self._finish_task)
+        else:
+            self._finish_task()
+
+    def _finish_task(self):
+        t = self._task; self._task = None
+        self.get_logger().info(
+            f'Tarefa {t.type if t else "?"} concluída.  '
+            f'bat={self._battery:.1f}%  fila={len(self._queue)}')
+
+        if self._battery < LOW_AFTER:
+            self.get_logger().warn(
+                f'Bateria baixa ({self._battery:.1f}%) — forçando retorno.')
+            self._start_returning_home(); return
+
+        if self._queue and self._battery >= MIN_FOR_TASK:
+            self._task = self._queue.popleft()
+            self.get_logger().info(
+                f'Próxima tarefa direto: {self._task.type}')
+            self._start_going_to_task(); return
+
+        self._start_returning_home()
+
+    # ── RETURNING_HOME ────────────────────────────────────────────────────────
+    def _start_returning_home(self):
+        self._set_state(RETURNING_HOME)
+        self._dock_retries = 0
+        # DockRobot com navigate_to_staging_pose=True cuida da navegação + abordagem precisa
+        self._start_docking()
 
 
 def main(args=None):

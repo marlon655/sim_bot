@@ -43,7 +43,7 @@ docking_server:
       # The estimator already publishes the correct robot approach pose
       # (marker_pos - STOP_DISTANCE in approach direction), so zero offsets.
       external_detection_translation_x: 0.0
-      external_detection_translation_y: 0.0
+      external_detection_translation_y: -0.04
       external_detection_rotation_yaw: 0.0
       external_detection_rotation_pitch: 0.0
       external_detection_rotation_roll: 0.0
@@ -51,7 +51,7 @@ docking_server:
 
       # Stop when robot center is within 5 cm of the published dock pose.
       # dock_pose_estimator offsets the target so 5 cm lands before contact.
-      docking_threshold: 0.02           # m – isDocked() = true threshold
+      docking_threshold: 0.05           # m – isDocked() = true threshold (5 cm, tolerante a erros do estimador)
 
       # Staging pose: 1.0 m in front of dock face (dock at 2.0 m, staging at ~1.0 m)
       staging_x_offset: -1.0            # m – negative = toward robot
@@ -67,5 +67,5 @@ docking_server:
     base_carregamento:
       type: 'charging_dock'
       frame: 'odom'
-      # Robot spawns at world (-3,-3) = odom (0,0). Dock at world (2,0) = odom (5,3).
-      pose: [5.0, 3.0, 0.0]
+      # Robot spawns at world (1,0) = odom (0,0). Dock at world (2,0) = odom (1,0).
+      pose: [1.0, 0.0, 0.0]

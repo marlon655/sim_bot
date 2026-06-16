@@ -7,93 +7,45 @@
       <real_time_factor>1</real_time_factor>
     </physics>
 
-    <plugin
-        filename="libgz-sim-physics-system.so"
-        name="gz::sim::systems::Physics">
+    <plugin filename="libgz-sim-physics-system.so"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="libgz-sim-user-commands-system.so"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="libgz-sim-scene-broadcaster-system.so"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="libgz-sim-sensors-system.so"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
     </plugin>
-    <plugin
-        filename="libgz-sim-user-commands-system.so"
-        name="gz::sim::systems::UserCommands">
-    </plugin>
-    <plugin
-        filename="libgz-sim-scene-broadcaster-system.so"
-        name="gz::sim::systems::SceneBroadcaster">
-    </plugin>
-    <plugin
-        filename="libgz-sim-sensors-system.so"
-        name="gz::sim::systems::Sensors">
-        <render_engine>ogre2</render_engine>
-    </plugin>
-    <plugin 
-        filename="libgz-sim-contact-system.so"
-        name="gz::sim::systems::Contact">
-    </plugin>
-    
+    <plugin filename="libgz-sim-contact-system.so"
+            name="gz::sim::systems::Contact"/>
+
+    <!-- ── Ground plane ─────────────────────────────────────────────── -->
     <model name='ground_plane'>
       <static>true</static>
       <link name='link'>
         <collision name='collision'>
-          <geometry>
-            <plane>
-              <normal>0 0 1</normal>
-              <size>100 100</size>
-            </plane>
-          </geometry>
-          <surface>
-            <friction>
-              <ode/>
-            </friction>
-            <bounce/>
-            <contact/>
-          </surface>
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
         </collision>
         <visual name='visual'>
-          <geometry>
-            <plane>
-              <normal>0 0 1</normal>
-              <size>100 100</size>
-            </plane>
-          </geometry>
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
           <material>
             <ambient>0.8 0.8 0.8 1</ambient>
             <diffuse>0.8 0.8 0.8 1</diffuse>
             <specular>0.8 0.8 0.8 1</specular>
           </material>
         </visual>
-        <pose>0 0 0 0 -0 0</pose>
-        <inertial>
-          <pose>0 0 0 0 -0 0</pose>
-          <mass>1</mass>
-          <inertia>
-            <ixx>1</ixx>
-            <ixy>0</ixy>
-            <ixz>0</ixz>
-            <iyy>1</iyy>
-            <iyz>0</iyz>
-            <izz>1</izz>
-          </inertia>
-        </inertial>
-        <enable_wind>false</enable_wind>
       </link>
-      <pose>0 0 0 0 -0 0</pose>
-      <self_collide>false</self_collide>
     </model>
 
-
-
-    <!-- ── Charging dock ────────────────────────────────────────────────
-         Position: 3.5 m ahead, 0.6 m offset in Y so the robot must
-         navigate and align (not a straight shot from the spawn pose).
-         The ArUco tag (ID=771) faces -X, toward the robot spawn point.
-         GZ_SIM_RESOURCE_PATH must include <pkg_share>/models for this
-         include to resolve (set in palmares_bot.launch.py).
-    ──────────────────────────────────────────────────────────────── -->
+    <!-- ── Charging dock (world 2,0) ─────────────────────────────────── -->
     <include>
       <uri>model://charging_dock</uri>
       <name>charging_dock</name>
       <pose>2.0 0.0 0 0 0 0</pose>
     </include>
 
+    <!-- ── Lights ────────────────────────────────────────────────────── -->
     <light name='sun' type='directional'>
       <pose>0 0 10 0 -0 0</pose>
       <cast_shadows>true</cast_shadows>
@@ -101,22 +53,11 @@
       <direction>-0.5 0.1 -0.9</direction>
       <diffuse>0.8 0.8 0.8 1</diffuse>
       <specular>0.2 0.2 0.2 1</specular>
-      <attenuation>
-        <range>1000</range>
-        <linear>0.01</linear>
-        <constant>0.90000000000000002</constant>
-        <quadratic>0.001</quadratic>
-      </attenuation>
-      <spot>
-        <inner_angle>0</inner_angle>
-        <outer_angle>0</outer_angle>
-        <falloff>0</falloff>
-      </spot>
+      <attenuation><range>1000</range><linear>0.01</linear>
+                   <constant>0.9</constant><quadratic>0.001</quadratic></attenuation>
     </light>
 
-    <!-- Secondary light facing the dock's ArUco face (-X direction).
-         The main sun (direction -0.5 … ) shines on the +X (back) face,
-         leaving the ArUco face in shadow. This fill-light compensates. -->
+    <!-- Fill light facing the ArUco face of the dock -->
     <light name='dock_fill' type='directional'>
       <pose>0 0 5 0 0 0</pose>
       <cast_shadows>false</cast_shadows>
@@ -125,6 +66,132 @@
       <diffuse>1 1 1 1</diffuse>
       <specular>0 0 0 1</specular>
     </light>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         STATIC OBSTACLES — wander environment
+         Positions (world frame). Robot spawns at (-3,-3). Dock at (2,0).
+         Approach corridor kept clear: world X=[0,2], Y=[-0.4, 0.4].
+    ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- Obs 1 — orange shelf, world (-1.5, 1.5) -->
+    <model name="obs_box_1">
+      <static>true</static>
+      <pose>-1.5 1.5 0 0 0 0.4</pose>
+      <link name="link">
+        <collision name="col">
+          <pose>0 0 0.35 0 0 0</pose>
+          <geometry><box><size>0.50 0.30 0.70</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <pose>0 0 0.35 0 0 0</pose>
+          <geometry><box><size>0.50 0.30 0.70</size></box></geometry>
+          <material>
+            <ambient>0.85 0.35 0.05 1</ambient>
+            <diffuse>0.85 0.35 0.05 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obs 2 — blue cylinder, world (-2.0, -1.0) -->
+    <model name="obs_cyl_1">
+      <static>true</static>
+      <pose>-2.0 -1.0 0 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <pose>0 0 0.40 0 0 0</pose>
+          <geometry><cylinder><radius>0.20</radius><length>0.80</length></cylinder></geometry>
+        </collision>
+        <visual name="vis">
+          <pose>0 0 0.40 0 0 0</pose>
+          <geometry><cylinder><radius>0.20</radius><length>0.80</length></cylinder></geometry>
+          <material>
+            <ambient>0.10 0.30 0.80 1</ambient>
+            <diffuse>0.10 0.30 0.80 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obs 3 — yellow box, world (0.2, 2.5) -->
+    <model name="obs_box_2">
+      <static>true</static>
+      <pose>0.2 2.5 0 0 0 0.8</pose>
+      <link name="link">
+        <collision name="col">
+          <pose>0 0 0.30 0 0 0</pose>
+          <geometry><box><size>0.30 0.50 0.60</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <pose>0 0 0.30 0 0 0</pose>
+          <geometry><box><size>0.30 0.50 0.60</size></box></geometry>
+          <material>
+            <ambient>0.90 0.80 0.05 1</ambient>
+            <diffuse>0.90 0.80 0.05 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obs 4 — green cylinder, world (-0.8, -1.8) -->
+    <model name="obs_cyl_2">
+      <static>true</static>
+      <pose>-0.8 -1.8 0 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <pose>0 0 0.45 0 0 0</pose>
+          <geometry><cylinder><radius>0.15</radius><length>0.90</length></cylinder></geometry>
+        </collision>
+        <visual name="vis">
+          <pose>0 0 0.45 0 0 0</pose>
+          <geometry><cylinder><radius>0.15</radius><length>0.90</length></cylinder></geometry>
+          <material>
+            <ambient>0.10 0.70 0.15 1</ambient>
+            <diffuse>0.10 0.70 0.15 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obs 5 — red box, world (-2.5, 0.5) -->
+    <model name="obs_box_3">
+      <static>true</static>
+      <pose>-2.5 0.5 0 0 0 0.3</pose>
+      <link name="link">
+        <collision name="col">
+          <pose>0 0 0.25 0 0 0</pose>
+          <geometry><box><size>0.60 0.30 0.50</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <pose>0 0 0.25 0 0 0</pose>
+          <geometry><box><size>0.60 0.30 0.50</size></box></geometry>
+          <material>
+            <ambient>0.80 0.10 0.10 1</ambient>
+            <diffuse>0.80 0.10 0.10 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obs 6 — gray box, world (-1.0, -2.5) -->
+    <model name="obs_box_4">
+      <static>true</static>
+      <pose>-1.0 -2.5 0 0 0 1.1</pose>
+      <link name="link">
+        <collision name="col">
+          <pose>0 0 0.25 0 0 0</pose>
+          <geometry><box><size>0.40 0.40 0.50</size></box></geometry>
+        </collision>
+        <visual name="vis">
+          <pose>0 0 0.25 0 0 0</pose>
+          <geometry><box><size>0.40 0.40 0.50</size></box></geometry>
+          <material>
+            <ambient>0.55 0.55 0.55 1</ambient>
+            <diffuse>0.55 0.55 0.55 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
 
   </world>
 </sdf>

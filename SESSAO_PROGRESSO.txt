@@ -1,360 +1,332 @@
 ================================================================================
   PROGRESSO DO PROJETO - Robot Docking Autônomo (sim_bot)
-  Atualizado em: 2026-06-15
+  Atualizado em: 2026-06-16
 ================================================================================
 
 OBJETIVO GERAL
 --------------
 Robot autônomo (palmares_bot) realiza docking na estação de carregamento
-(charging_dock) usando ArUco ID=771, comando: "vai pra dock"
+(charging_dock) usando ArUco ID=771, comando: sistema de bateria + fila de tarefas
 Stack: ROS2 Jazzy + Gazebo Harmonic + Nav2 + slam_toolbox + opennav_docking
+
+================================================================================
+SESSÃO 8 — 2026-06-16
+================================================================================
+
+MUDANÇAS DA SESSÃO 8:
+
+  1. [SPAWN] Robô nasce em world(1,0) — no staging, já "conectado" ao dock
+     - Antes: world(-3,-3) = odom(0,0) — longe do dock
+     - Agora:  world( 1, 0) = odom(0,0) — exatamente no staging (1m à frente do dock)
+     - Dock world(2,0) = odom(1,0) no novo frame
+     - launch/palmares_bot.launch.py: -x '-3.0' -y '-3.0' → -x '1.0' -y '0.0' -Y '0.0'
+
+  2. [AUTOSTART] Robô nasce em HOME_CHARGING sem navegar
+     - _autostart() antes: _navigate_to_staging() → ciclo completo de docking
+     - _autostart() agora: _set_state(HOME_CHARGING) direto (já está no staging)
+     - Reduz tempo de startup: robô aceita tarefas 15s após launch
+
+  3. [DOCKING] DockRobot com navigate_to_staging_pose=True
+     - Antes: navigate_to_staging_pose=False — charging_manager navegava até staging
+       manualmente (Nav2 + centering) e DEPOIS chamava DockRobot só para a abordagem
+     - Agora:  navigate_to_staging_pose=True — o próprio docking server faz
+       navegação até staging + abordagem de precisão completa
+     - _start_returning_home() chama _start_docking() diretamente (sem staging nav manual)
+     - Resultado: robô para mais reto (abordagem gerida inteiramente pelo servidor)
+     - Retries de falha também chamam _start_docking() diretamente
+
+  4. [ALINHAMENTO] Check de Y e yaw restaurado em _dock_res
+     - Robô só entra em HOME_CHARGING se estiver alinhado após DockRobot status=4
+     - DOCK_Y_ODOM = 0.0  (dock em odom y=0.0 no novo frame)
+     - ALIGN_TOL_Y  = 0.05 m  — 5 cm lateral
+     - ALIGN_TOL_YAW = 0.17 rad — ≈ 10° angular
+     - Se torto → retry _start_docking() (até DOCK_MAX_FAILS=4 vezes)
+     - Log mostra y_err e yaw a cada tentativa
+
+  5. [BATERIA] Tempos dobrados
+     - Drain:  1.0 %/s → 0.5 %/s  (100→0 em 200 s em vez de 100 s)
+     - Charge: 2.0 %/s → 1.0 %/s  (0→100 em 100 s em vez de  50 s)
+
+  6. [TÓPICO] /go_charge adicionado
+     - std_msgs/Empty — força retorno ao dock de qualquer estado
+     - Aborta tarefa atual (self._task = None) e chama _start_returning_home()
+     - Ignorado se robô já estiver em HOME_CHARGING, DOCKING ou RETURNING_HOME
+
+  7. [MONITOR] Estado publicado a 1 Hz
+     - Antes: /charging_manager/state só publicava em transições de estado
+     - Agora: republica o estado atual a cada battery_tick (1 s)
+     - "ros2 topic echo /charging_manager/state --once" retorna imediatamente
+
+  8. [COORDENADAS] Atualização completa para novo odom frame
+     - STAGING_X = 0.0, STAGING_Y = 0.0  (spawn = staging)
+     - config/docking_params.yaml: pose [5.0, 3.0, 0.0] → [1.0, 0.0, 0.0]
+     - nodes/alignment_test.py: DOCK_Y_ODOM 2.96 → 0.0
+     - PATROL_ROUTES atualizadas (área livre fica em x<0 no novo odom):
+         A: (-1.5,1.0) → (-2.0,0.0) → (-1.5,-1.0)
+         B: (-1.0,-0.5) → (-2.5,-0.5) → (-2.0,1.0)
+         C: (-2.0,0.5) → (-1.0,1.5) → (-1.5,-0.5)
+
+================================================================================
+SESSÃO 7 — 2026-06-15
+================================================================================
+
+MUDANÇAS DA SESSÃO 7:
+
+  1. [REESCRITA] charging_manager.py — novo sistema orientado a tarefas com bateria
+
+     ARQUITETURA NOVA (substitui o loop wander→dock):
+       STARTUP → HOME_CHARGING (dock permanente = home)
+       HOME_CHARGING: carrega sempre; aceita tarefa da fila se bat ≥ 40%
+       Tarefa aceita → UNDOCKING → GOING_TO_TASK → EXECUTING_TASK → RETURNING_HOME
+       Após tarefa:
+         bat < 20% → retorna imediatamente (forçado)
+         bat ≥ 20% + fila não vazia + bat ≥ 40% → executa próxima tarefa direto
+         caso contrário → retorna para home
+
+     FILA DE TAREFAS:
+       - FIFO; tarefas publicadas nos tópicos sempre entram na fila
+       - Processada automaticamente quando HOME_CHARGING + bat ≥ 40%
+       - Se robô estiver em qualquer outro estado: fila acumula, aguarda retorno
+
+     QUATRO TIPOS DE TAREFA:
+       /task/goto_pose   geometry_msgs/PoseStamped  — vai ao ponto, espera 2 s
+       /task/inspect     geometry_msgs/PoseStamped  — vai, espera 5 s (inspeção)
+       /task/patrol      std_msgs/String            — patrulha rota "A", "B" ou "C"
+       /task/deliver     geometry_msgs/PoseStamped  — vai, espera 3 s (entrega)
+
+     BUGS CORRIGIDOS NA SESSÃO 7:
+       - wait_for_server() removido de todos os callbacks (bloqueava o executor)
+       - server_is_ready() não-bloqueante + retry via _once() em todos os action clients
+       - DOCK_MAX_FAILS=4: contador de falhas de DockRobot (evita loop infinito)
+       - Undocking simples: reverse cmd_vel (UNDOCK_SPEED=-0.15 m/s × 2.0s ≈ 30cm)
+         em vez de UndockRobot action (mais confiável)
+       - docking_threshold: 0.02 → 0.05 (5cm tolerância, evita DockRobot nunca declarar sucesso)
+
+================================================================================
+SESSÃO 6 — 2026-06-15
+================================================================================
+
+MUDANÇAS DA SESSÃO 6:
+  1. [CAUSA RAIZ] Robô deslocado 5 cm à esquerda → corrigido
+     - chassis_joint Y=+0.050 (5 cm esq do base_link)
+     - FIX: external_detection_translation_y: 0.0 → -0.05 (docking_params.yaml)
+  2. [ERRO 1] odom frame usado para tudo (abandona map frame)
+  3. [ERRO 2] map_update_interval: 5.0 → 15.0 (menos TF jumps)
+  4. [ERRO 3] static_layer adicionado ao global_costmap
+  5. [ERRO 4] Mismatch de pose home resolvido pela mudança de frame
 
 ================================================================================
 SESSÃO 5 — 2026-06-15
 ================================================================================
-
-MUDANÇAS DA SESSÃO 5:
-  1. Câmera baixada 5 cm (Z joint: 0.14 → 0.09 em camera.xacro)
-     → altura absoluta: 0.175 + 0.09 = 0.265 m
-  2. ArUco baixado 5 cm (pose Z: 0.315 → 0.265 em model.sdf)
-     → câmera e ArUco agora na mesma altura absoluta (0.265 m)
-     → ArUco centralizado verticalmente no frame da câmera
-  3. Banner de comandos adicionado ao charging_manager.py
-     → impresso toda vez que o ciclo termina (IDLE)
-  4. Ajuste lateral de alinhamento: STAGING_Y e DOCK_Y_ODOM: 3.0 → 2.97
-     → robô posicionado 3 cm para a direita da centerline da dock
-     → "direita" = sentido −Y (robô olhando para dock no sentido +X)
-
-ATENÇÃO — LIÇÃO APRENDIDA:
-  NÃO colocar pkill dentro do launch file.
-  O pkill -9 -f "ros2 launch sim_bot" mata o próprio processo de launch.
-  O kill de sessões anteriores deve ser feito manualmente no Terminal 1.
+  1. Câmera baixada 5 cm (joint Z: 0.14 → 0.09); ArUco alinhado em 0.265 m
+  2. Ajuste lateral STAGING_Y e DOCK_Y_ODOM: 3.0 → 2.97
 
 ================================================================================
-SESSÃO 4 — 2026-06-11 (RESUMO RÁPIDO)
+SESSÃO 4 — 2026-06-11
 ================================================================================
-
-CICLO COMPLETO VALIDADO INTERNAMENTE (teste headless automatizado):
-  t+0s   /go_charge → NAVIGATING_TO_STAGING
-  t+22s  Reached staging area → DOCKING (LiDAR guiou)
-  t+29s  Docking successful → CHARGING
-  t+44s  Charge complete → UNDOCKING
-  t+51s  Undocking successful → RETURNING
-  t+72s  Returned home successfully → IDLE ✅
-
-MUDANÇAS CRÍTICAS DA SESSÃO 4 (detalhes abaixo em ARQUIVOS MODIFICADOS):
-  1. bt_navigator.global_frame: map → odom  (elimina dependência de SLAM para Nav2)
-  2. Planner: NavFnPlanner → SmacPlanner2D  (robusto com espaço desconhecido)
-  3. global_costmap: frame odom, 20×20m fixo, sem static_layer
-  4. dock pose: frame map [2,0,0] → frame odom [5,3,0]  (odom = world - spawn)
-  5. staging/home em charging_manager: map → odom frame
-  6. dock_pose_estimator: LiDAR ativo sem pré-requisito de ArUco ter sido visto
-
-PROBLEMA OBSERVADO PELO USUÁRIO (ainda não resolvido):
-  → ROBÔ SE PERDE durante navegação — ver seção PENDÊNCIAS para causas prováveis
+  Ciclo completo validado headless. bt_navigator → odom frame.
+  SmacPlanner2D. dock pose: odom [5,3,0].
 
 ================================================================================
 O QUE ESTÁ FUNCIONANDO (CONFIRMADO)
 ================================================================================
 
 [1] PILHA TF COMPLETA E ESTÁVEL
-    Cadeia: map → odom → base_footprint → base_link → chassis → laser_frame
-                                                               → camera_link → camera_link_optical
-    - odom_to_tf.py publica odom→base_footprint usando get_clock().now() (não msg.stamp)
-    - joint_state_publisher substitui bridge Gazebo de joint_states (timestamps monotônicos)
-    - Bridges TF e joint_states do Gazebo removidas do gz_bridge.yaml
-    - SLAM sobe com atraso de 5s (TimerAction) para TF já existir na primeira scan
+    map → odom → base_footprint → base_link → chassis → laser_frame / camera_link
+    - odom_to_tf.py publica odom→base_footprint com get_clock().now()
+    - joint_state_publisher (timestamps monotônicos)
 
-[2] ARUCO DETECTADO NA CÂMERA
-    - Problema raiz identificado e corrigido: o PNG original era DICT_ARUCO_ORIGINAL,
-      mas o detector usa DICT_4X4_1000 — dicionários diferentes, bits diferentes.
-    - PNG substituído pelo marcador correto gerado programaticamente com zona silenciosa.
-    - Arquivo: media/aruco-marker-ID=771(maior).png (conteúdo sobrescrito, 800x800px)
-    - Zona silenciosa (quiet zone) branca incluída — obrigatória para detecção.
-    - Confirmado: cv2.aruco.detectMarkers detecta ID=771 em DICT_4X4_1000.
-    - Tamanho físico do marcador (borda preta, sem quiet zone): 0.15m (caixa 0.20×0.20m)
-    - Iluminação: emissive_map + emissive 1 1 1 1 faz pixels brancos se auto-iluminarem
-      (legível mesmo com face em sombra). Fill light adicionado ao test.world.
-    - [SESSÃO 5] câmera e ArUco alinhados na mesma altura (0.265 m absoluto)
+[2] ARUCO DETECTADO
+    - DICT_4X4_1000 ID=771, marker_size=0.15m
+    - Câmera e ArUco alinhados em altura 0.265 m
 
-[3] dock_pose_estimator.py PUBLICANDO /detected_dock_pose
-    - Bug crítico corrigido: pt_cam.header.stamp usava msg.header.stamp (tempo Gazebo),
-      causando "Lookup would require extrapolation into the future" — o buffer TF
-      não tinha dados no instante exato da imagem → nenhuma pose publicada.
-    - Correção: pt_cam.header.stamp = rclpy.time.Time().to_msg() (usa o TF mais recente)
-    - Mesmo fix aplicado ao pt_laser no callback LiDAR.
-    - Confirmado: /detected_dock_pose publica a ~10Hz com robô de frente para a dock.
-    - Exemplo de output: x=1.916, y=0.001 em frame odom (dock em 2.0, 0.0).
+[3] dock_pose_estimator.py publicando /detected_dock_pose
+    - TF lookup com rclpy.time.Time().to_msg() (fix principal)
+    - LiDAR setor adaptativo ±30°/±60°
 
-[4] DOCKING SERVER RECEBE POSES
-    - /docking_server subscreve /detected_dock_pose corretamente (confirmado via
-      ros2 node info /docking_server).
-    - use_external_detection_pose: true configurado no docking_params.yaml.
+[4] SISTEMA DE BATERIA + FILA DE TAREFAS
+    - Drain 0.5%/s, Charge 1.0%/s
+    - Fila FIFO, 4 tipos de tarefa
+    - Emergência a 5%: aborta e retorna
+
+[5] SPAWN NO STAGING — CONECTADO DESDE O INÍCIO
+    - world(1,0) = odom(0,0) = staging (1m à frente do dock)
+    - HOME_CHARGING imediato em t=15s
 
 ================================================================================
-CICLO DE CARGA AUTÔNOMO (IMPLEMENTADO EM 2026-06-11, SESSÃO 3)
+COMO INICIAR E EXECUTAR (SESSÃO 8+)
 ================================================================================
 
-[5] CICLO COMPLETO DE CARGA — charging_manager.py
-    - NOVO nó nodes/charging_manager.py orquestra o ciclo completo:
-        /go_charge → Nav2 → staging (1m da dock) → DockRobot → 15s → UndockRobot → Nav2 home
-    - Máquina de estados: IDLE → NAVIGATING_TO_STAGING → CENTERING → DOCKING → CHARGING → UNDOCKING → RETURNING → IDLE
-    - CENTERING: coleta amostras de /detected_dock_pose por 2s, corrige Y lateral via Nav2
-    - Publica /charging_manager/state (std_msgs/String) para monitoramento
-    - Usa MultiThreadedExecutor para action callbacks não bloquearem subscriber
-    - [SESSÃO 5] Banner com comandos de cada terminal impresso ao entrar em IDLE
-
-[6] SPAWN EM POSIÇÃO DISTANTE
-    - Robô spawna em (-3.0, -3.0) — canto oposto à dock em (2.0, 0.0)
-    - Nav2 deve construir mapa SLAM suficiente para planejar rota até staging
-    - dock_prestaging_tolerance reduzida de 1.5m → 0.25m (Nav2 realmente navega)
-    - staging_x_offset ajustado de -0.7m → -1.0m (staging a 1m da face da dock)
-
-[7] LIDAR CENTRALIZAÇÃO MELHORADA
-    - dock_pose_estimator.py atualizado com setor adaptativo:
-        * Setor normal ±30° para detecção inicial
-        * Setor largo ±60° quando min_range < 0.5m (captura dock de 0.6m de largura)
-    - face_x = média da banda central ±20° (evita sub-estimativa de oblíquos)
-    - center_y = mean Y dos pontos da face frontal
-    - aruco_timeout: 2.0s (LiDAR assume após ArUco desaparecer)
-    - Janela do cluster: 20cm
-
-================================================================================
-COMO INICIAR E EXECUTAR O CICLO COMPLETO
-================================================================================
-
-# Terminal 1 — antes de cada sessão (mata processos anteriores):
+# Terminal 1 — mata processos anteriores:
 pkill -9 -f "gz sim|dock_pose_estimator|odom_to_tf|slam_toolbox|nav2|docking|twist_mux|robot_state_publisher|charging_manager" 2>/dev/null; sleep 2
 
-# Terminal 1 — sobe tudo:
-cd ~/sim_ws && source install/setup.bash && ros2 launch sim_bot palmares_bot.launch.py
-# Aguarda ~30s para SLAM (t=5s), Nav2 (t=20s) e docking server (t=25s) subirem.
+# Terminal 1 — build + launch:
+cd ~/sim_ws && colcon build --packages-select sim_bot && source install/setup.bash && ros2 launch sim_bot palmares_bot.launch.py
 
-# Terminal 2 — dispara o ciclo de carga:
+# Terminal 2 — monitorar estado e bateria:
 source ~/sim_ws/install/setup.bash
+watch -n 2 "echo '=== ESTADO ===' && ros2 topic echo /charging_manager/state --once 2>/dev/null && echo '=== BATERIA ===' && ros2 topic echo /battery_level --once 2>/dev/null"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# EXEMPLOS DE TAREFAS (terminal 3, aguardar ~15s após launch)
+# ──────────────────────────────────────────────────────────────────────────────
+source ~/sim_ws/install/setup.bash
+
+# 1. goto_pose
+ros2 topic pub --once /task/goto_pose geometry_msgs/msg/PoseStamped \
+  '{header: {frame_id: "odom"}, pose: {position: {x: -1.5, y: 1.0, z: 0.0}, orientation: {w: 1.0}}}'
+
+# 2. inspect
+ros2 topic pub --once /task/inspect geometry_msgs/msg/PoseStamped \
+  '{header: {frame_id: "odom"}, pose: {position: {x: -2.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}'
+
+# 3. patrol rota A
+ros2 topic pub --once /task/patrol std_msgs/msg/String '{data: "A"}'
+
+# 4. deliver
+ros2 topic pub --once /task/deliver geometry_msgs/msg/PoseStamped \
+  '{header: {frame_id: "odom"}, pose: {position: {x: -1.0, y: -0.5, z: 0.0}, orientation: {w: 1.0}}}'
+
+# Forçar retorno ao dock manualmente:
 ros2 topic pub --once /go_charge std_msgs/msg/Empty '{}'
 
-# Terminal 2 — monitora o estado:
-ros2 topic echo /charging_manager/state
-
-# Terminal 2 — diagnóstico (opcional):
+# ──────────────────────────────────────────────────────────────────────────────
+# DIAGNÓSTICO
+# ──────────────────────────────────────────────────────────────────────────────
 ros2 topic echo /detected_dock_pose
 ros2 topic echo /odom --once
 ros2 topic hz /camera/image
 
 ================================================================================
-FLUXO ESPERADO AO EXECUTAR /go_charge
+FLUXO ESPERADO (SESSÃO 8)
 ================================================================================
 
-1. [NAVIGATING_TO_STAGING] Nav2 navega de (-3,-3) para (4.0, 2.97) odom via SLAM
-2. [CENTERING] charging_manager coleta 2s de /detected_dock_pose, corrige Y lateral
-3. [DOCKING] docking_server assume:
-   - ArUco guia a distâncias maiores (setor ±30°, timeout 2.0s)
-   - LiDAR assume quando ArUco some: centra lateralmente com setor ±60°, para a 5cm
-4. [CHARGING] 15 segundos de carga (log "Charging... X/15 s")
-5. [UNDOCKING] Robô recua para staging area
-6. [RETURNING] Nav2 navega para (0.0, 0.0, yaw≈-135°)
-7. [IDLE] Banner com comandos impresso — pronto para novo ciclo
+STARTUP (t=0–15 s):
+  Robô estático em odom(0,0) = staging. Nav2 e docking server sobem.
+
+t≈15 s → HOME_CHARGING automático:
+  _autostart() → HOME_CHARGING (sem navegar — robô já está no staging)
+  Bateria começa a carregar a 1%/s.
+
+Quando HOME_CHARGING + bat ≥ 40% + tarefa na fila:
+  [UNDOCKING] → [GOING_TO_TASK] → [EXECUTING_TASK] → [RETURNING_HOME]
+  → [DOCKING]  (DockRobot navega até staging + abordagem precisa)
+  → verifica alinhamento (y_err≤5cm, yaw≤10°)
+  → [HOME_CHARGING]
+
+Regras de bateria:
+  bat ≥ 40% + fila → aceita tarefa
+  bat < 20% após tarefa → retorna imediatamente
+  bat ≤  5% durante tarefa → aborta e retorna
+  HOME_CHARGING → carregando sempre
 
 ================================================================================
-O QUE AINDA FALTA / PENDÊNCIAS
+PARÂMETROS IMPORTANTES (SESSÃO 8)
 ================================================================================
 
-[A] ROBÔ SE PERDE DURANTE NAVEGAÇÃO ← PRIORIDADE PRÓXIMA SESSÃO
-    ─────────────────────────────────────────────────────────────
-    SINTOMA: durante ou após a navegação o robô perde a posição real
-    e age como se estivesse em lugar diferente de onde está fisicamente.
+FRAME DE REFERÊNCIA (TUDO EM ODOM):
+  Spawn do robô (mundo):   ( 1.0,  0.0)  → odom (0.0, 0.0)  ← novo
+  Dock (mundo):            ( 2.0,  0.0)  → odom (1.0, 0.0)  ← novo
+  Staging:                 odom (0.0, 0.0) = spawn
+  Área de tarefas:         odom x<0 (oposto ao dock)
+  Conversão:               odom = world - spawn(1,0) = world + (-1, 0)
 
-    CAUSAS PROVÁVEIS (em ordem de probabilidade):
-
-    1. DERIVA DE ODOMETRIA (mais provável)
-       - Toda navegação usa frame odom (sem correção de SLAM).
-       - Rodas do robô (R=0.10m, sep=0.305m) acumulam erro de posição ao girar.
-       - Na rota (-3,-3)→(1,0) o robô faz uma curva longa (~36° de virada).
-       - Ao chegar em "odom(4,3)" o robô físico pode estar em outra posição.
-       - SOLUÇÃO POSSÍVEL A: usar SLAM para corrigir a posição (modo híbrido:
-         bt_navigator usa map frame MAS só depois do SLAM estabilizar, com
-         retries no charging_manager caso o primeiro goal falhe).
-       - SOLUÇÃO POSSÍVEL B: pre-construir mapa, usar AMCL para localização
-         estável (map frame sem pulos de TF), navegar em map frame novamente.
-
-    2. SLAM AINDA SALTANDO TF (jump back in time)
-       - SLAM em modo mapping publica map→odom a 50Hz.
-       - A cada 5s (map_update_interval) re-otimiza e pode gerar TF com
-         timestamp passado, limpando o buffer.
-       - Mesmo sem usar map frame na navegação, o salto afeta laser_frame→odom
-         via: laser_frame→base_footprint→odom (odom_to_tf usa get_clock().now()
-         então este segmento é estável), MAS pode afetar o slam_toolbox
-         rejeitando scans ("Message Filter dropping: queue is full").
-       - Scans descartados → costmap obstacle_layer sem atualização → robô
-         navega "às cegas" por alguns segundos → perde trajetória correta.
-       - SOLUÇÃO: aumentar map_update_interval (ex: 15s) para reduzir
-         frequência dos saltos; ou desligar SLAM completamente
-         (slam:=False no launch) enquanto testa navegação.
-
-    3. COSTMAP SEM MAPA ESTÁTICO — OBSTÁCULOS INVISÍVEIS
-       - O global_costmap usa apenas obstacle_layer (LiDAR atual).
-       - A dock é marcada como obstáculo em odom≈(5,3) mas somente enquanto
-         estiver no range do LiDAR.
-       - Se o robô se afasta e a dock sai do raio LiDAR (>10m ← não é o caso),
-         a dock some do costmap e o planner planeja passar por ela.
-       - SOLUÇÃO: checar no RViz se a dock aparece como obstáculo no costmap
-         durante toda a navegação (topic: /global_costmap/costmap).
-
-    4. MISMATCH NA POSE DE RETORNO (home após undocking)
-       - Após undocking o robô está perto de odom(4,3) mas pode ter sofrido
-         drift de contato físico com a dock.
-       - Navegar para odom(0,0) com odom já driftado = vai para lugar errado.
-       - SOLUÇÃO: usar LiDAR ao chegar em "home" para confirmar posição,
-         ou aceitar uma tolerância maior para o goal de retorno.
-
-    DIAGNÓSTICO RÁPIDO:
-       ros2 topic echo /odom --once         # posição odom atual
-       ros2 topic echo /detected_dock_pose  # pose publicada pelo estimador
-       ros2 topic echo /global_costmap/costmap_updates  # costmap sendo atualizado?
-       rviz2 → add topic /global_costmap/costmap  # visualizar costmap
-
-[B] TESTE EM RVIZ DURANTE CICLO COMPLETO
-    - Ciclo foi validado headless mas não observado visualmente em Gazebo GUI.
-    - Objetivo: confirmar trajetória física do robô condiz com odom frame.
-    - Verificar se dock aparece como obstáculo vermelho no RViz durante todo ciclo.
-
-[C] VALIDAR ARUCO DETECTION EM TEMPO REAL
-    - ArUco não foi necessário no teste interno (LiDAR funcionou sozinho).
-    - [SESSÃO 5] câmera e ArUco alinhados em 0.265 m — deve melhorar detecção.
-    - Verificar se câmera detecta ArUco quando robô está em staging:
-        ros2 topic hz /camera/image          # câmera publicando?
-        ros2 topic echo /detected_dock_pose  # muda quando ArUco é visto?
-
-================================================================================
-ARQUIVOS MODIFICADOS (ACUMULADO DAS 5 SESSÕES)
-================================================================================
-
-nodes/dock_pose_estimator.py
-    - TF lookup: msg.header.stamp → rclpy.time.Time().to_msg() (fix principal)
-    - marker_size default: 0.40 → 0.30 → 0.15 (tamanho real da borda preta: 75% de 0.20m)
-    - _make_pose_stamped: adicionado parâmetro stamp
-    - adaptiveThreshConstant=3, CORNER_REFINE_SUBPIX
-    - [SESSÃO 3] aruco_timeout: 1.5s → 0.5s
-    - [SESSÃO 3] Adicionados params: close_sector_deg=60.0, close_range_m=0.5
-    - [SESSÃO 3] LiDAR _scan_cb: setor adaptativo
-    - [SESSÃO 4] _scan_cb: removido pré-requisito de ArUco; LiDAR sempre ativo
-    - [SESSÃO 4] yaw no LiDAR fallback: _approach_yaw() em vez de 0.0 fixo
-    - aruco_timeout atual: 2.0s (docking.launch.py)
-
-nodes/odom_to_tf.py
-    - CRIADO: publica odom→base_footprint com get_clock().now()
-
-nodes/charging_manager.py
-    - CRIADO [SESSÃO 3]: orquestrador do ciclo completo de carga
-    - Máquina de estados 7 fases incluindo CENTERING (correção lateral pré-dock)
-    - [SESSÃO 4] Frame: map → odom para todas as poses
-    - [SESSÃO 4] STAGING: map(1,0) → odom(4,3)
-    - [SESSÃO 4] HOME: map(-3,-3) → odom(0,0)
-    - [SESSÃO 5] Banner de comandos impresso ao entrar em IDLE
-    - [SESSÃO 5] STAGING_Y: 3.0 → 2.97 (ajuste de 3cm para a direita)
-    - [SESSÃO 5] DOCK_Y_ODOM: 3.0 → 2.97
-
-description/camera.xacro
-    - [SESSÃO 5] Camera joint Z: 0.14 → 0.09 (baixou 5 cm)
-    - Altura absoluta: 0.265 m
-
-models/charging_dock/model.sdf
-    - Collision box corrigida para dimensões reais do STL
-    - ArUco visual: x=0.232m (face frontal real)
-    - ArUco box: 0.002 × 0.20 × 0.20m (200mm físico)
-    - Material: emissive_map + emissive 1 1 1 1
-    - [SESSÃO 5] ArUco pose Z: 0.315 → 0.265 (baixou 5 cm, alinha com câmera)
-
-config/gz_bridge.yaml
-    - Bridges TF (Pose_V) e joint_states removidas
-
-config/slam_params.yaml
-    - transform_timeout: 0.5 → 1.0s
-    - [SESSÃO 4] map_start_pose removido (ineficaz no modo mapping)
-
-config/nav_params.yaml
-    - transform_tolerance: 0.5s em todos os costmaps e controller
-    - [SESSÃO 4] bt_navigator.global_frame: map → odom
-    - [SESSÃO 4] Planner: NavfnPlanner → SmacPlanner2D (allow_unknown)
-    - [SESSÃO 4] global_costmap.global_frame: map → odom
-    - [SESSÃO 4] global_costmap: width=20, height=20, origin=(-3,-3), sem static_layer
-    - [SESSÃO 4] obstacle_layer ranges: raytrace=3→12m, obstacle=2.5→10m
-
-config/twist_mux_params.yaml
-    - use_stamped: false
-
-config/docking_params.yaml
-    - dock pose: yaw 3.14 → 0.0
-    - [SESSÃO 3] dock_prestaging_tolerance: 1.5 → 0.25m
-    - [SESSÃO 3] staging_x_offset: -0.7 → -1.0m
-    - [SESSÃO 4] dock frame: map → odom
-    - [SESSÃO 4] dock pose: [2,0,0] → [5,3,0]  (odom = world - spawn)
-
-worlds/test.world
-    - Barris removidos
-    - Dock em (2.0, 0.0, yaw=0)
-    - Luz fill (dock_fill) adicionada para iluminar face ArUco
-
-media/aruco-marker-ID=771(maior).png
-    - CONTEÚDO SUBSTITUÍDO: era DICT_ARUCO_ORIGINAL, agora é DICT_4X4_1000 ID=771
-    - 800×800px com zona silenciosa branca de 100px em cada borda
-
-CMakeLists.txt
-    - Instala aruco-marker-ID=771(maior).png como aruco_marker_771.png
-    - Instala odom_to_tf.py como PROGRAM
-    - [SESSÃO 3] Instala charging_manager.py como PROGRAM
-
-launch/palmares_bot.launch.py
-    - +odom_to_tf node
-    - +joint_state_publisher node
-    - SLAM com TimerAction(5s)
-    - Nav2 com TimerAction(20s)
-    - Docking com TimerAction(25s)
-    - [SESSÃO 3] spawn: (0,0) → (-3.0, -3.0)
-
-launch/docking.launch.py
-    - marker_size: 0.40 → 0.15 (borda preta = 75% da caixa 0.20 m)
-    - aruco_timeout: 2.0s
-    - +close_sector_deg=60.0, +close_range_m=0.5
-    - stop_distance: 0.30m
-    - +charging_manager node
-
-================================================================================
-PARÂMETROS IMPORTANTES
-================================================================================
-
-FRAME DE REFERÊNCIA (TUDO EM ODOM, não map):
-  Spawn do robô (mundo):   (-3.0, -3.0)     → odom (0.0, 0.0)
-  Dock (mundo):            ( 2.0,  0.0)     → odom (5.0, 3.0)
-  Staging (mundo):         ( 1.0, -0.03)    → odom (4.0, 2.97)  ← 3cm direita
-  Home (mundo):            (-3.0, -3.0)     → odom (0.0, 0.0)
-  Conversão:               odom = world - spawn(-3,-3) = world + (3,3)
+OBSTÁCULOS (novo odom frame):
+  obs_box_1   odom(-2.5,  1.5)   cyl1 odom(-3.0, -1.0)
+  obs_box_2   odom(-0.8,  2.5)   cyl2 odom(-1.8, -1.8)
+  obs_box_3   odom(-3.5,  0.5)   box4 odom(-2.0, -2.5)
 
 CÂMERA E ARUCO:
-  Câmera altura absoluta:  0.265 m  (chassis 0.175 + joint 0.09)
-  ArUco altura (dock):     0.265 m  (pose Z no model.sdf)
-  ArUco box:               0.20 × 0.20 m
-  marker_size param:       0.15 m  (borda preta = 75% de 0.20)
+  Câmera altura absoluta:  0.265 m
+  ArUco altura (dock):     0.265 m
+  marker_size param:       0.15 m
 
 NAVEGAÇÃO:
   bt_navigator.global_frame: odom
   Planner:                 SmacPlanner2D (MOORE, allow_unknown)
-  Global costmap:          odom frame, 20×20m, origin(-3,-3), sem static_layer
-  Obstacle layer ranges:   raytrace=12m, obstacle=10m
 
 DOCKING:
-  Dock frame/pose:         odom / [5.0, 3.0, 0.0]
-  staging_x_offset:        -1.0m  → staging = odom(4.0, 2.97)
-  staging tolerância:      0.25m
-  ArUco ID:                771, DICT_4X4_1000
-  stop_distance:           0.30m (robô para ~5cm antes da face)
-  docking_threshold:       0.05m (tolerância isDocked())
-  aruco_timeout:           2.0s
-  LiDAR setor normal:      ±30° (range > 0.5m)
-  LiDAR setor largo:       ±60° (range < 0.5m)
+  Dock frame/pose:         odom / [1.0, 0.0, 0.0]  ← novo
+  navigate_to_staging_pose: true  (servidor cuida de tudo)
+  staging_x_offset:        -1.0m
+  docking_threshold:       0.05m
+  ALIGN_TOL_Y:             0.05m (5 cm)
+  ALIGN_TOL_YAW:           0.17 rad (10°)
+  DOCK_MAX_FAILS:          4
 
-CICLO:
-  Tempo de carga:          15 segundos
-  Home pose odom:          (0.0, 0.0, yaw=-2.356 rad)
+BATERIA:
+  Drain:  0.5%/s  → 100→0 em 200 s
+  Charge: 1.0%/s  →   0→100 em 100 s
+  MIN_FOR_TASK: 40%   LOW_AFTER: 20%   EMERGENCY: 5%
+
+================================================================================
+ARQUIVOS MODIFICADOS (ACUMULADO — SESSÃO 8)
+================================================================================
+
+nodes/charging_manager.py
+    [S3]  CRIADO — orquestrador do ciclo completo
+    [S4]  Frame: map → odom
+    [S5]  STAGING_Y: 3.0 → 2.97; banner de comandos
+    [S7]  REESCRITA: bateria + fila + 4 tipos de tarefa; server_is_ready() não-bloqueante
+    [S7]  DOCK_MAX_FAILS=4; undocking simples (cmd_vel reverse)
+    [S8]  Spawn world(1,0): STAGING_X=0.0, STAGING_Y=0.0
+    [S8]  _autostart → HOME_CHARGING direto (sem navegar)
+    [S8]  DockRobot navigate_to_staging_pose=True
+    [S8]  _start_returning_home → _start_docking() (sem staging nav manual)
+    [S8]  Alinhamento pós-docking: DOCK_Y_ODOM=0.0, ALIGN_TOL_Y=0.05, ALIGN_TOL_YAW=0.17
+    [S8]  Bateria: drain 1.0→0.5%/s, charge 2.0→1.0%/s
+    [S8]  /go_charge (std_msgs/Empty) força retorno ao dock
+    [S8]  Estado publicado a 1Hz (monitor funciona com --once)
+    [S8]  PATROL_ROUTES atualizadas para novo odom frame
+
+config/docking_params.yaml
+    [S3]  dock_prestaging_tolerance: 1.5 → 0.25m; staging_x_offset: -0.7 → -1.0m
+    [S4]  dock frame: map → odom; pose [2,0,0] → [5,3,0]
+    [S7]  docking_threshold: 0.02 → 0.05
+    [S8]  dock pose: [5,3,0] → [1,0,0]  (novo frame, spawn world(1,0))
+
+launch/palmares_bot.launch.py
+    [S3]  +odom_to_tf, +joint_state_publisher; spawn (-3,-3)
+    [S3]  SLAM t=5s, Nav2 t=20s, Docking t=25s
+    [S8]  Spawn: (-3,-3) → (1,0,yaw=0)
+
+nodes/alignment_test.py
+    [S8]  DOCK_Y_ODOM: 2.96 → 0.0
+
+nodes/dock_pose_estimator.py
+    [S4]  TF lookup: msg.header.stamp → rclpy.time.Time().to_msg()
+    [S4]  LiDAR sempre ativo (sem pré-requisito ArUco)
+
+nodes/odom_to_tf.py
+    [S3]  CRIADO
+
+config/nav_params.yaml
+    [S4]  bt_navigator.global_frame: map → odom
+    [S4]  SmacPlanner2D; global_costmap 20×20m odom
+
+config/slam_params.yaml
+    [S4]  map_update_interval: 5.0 → 15.0
+
+config/gz_bridge.yaml
+    Bridges TF e joint_states removidas
+
+description/camera.xacro
+    [S5]  Camera joint Z: 0.14 → 0.09
+
+models/charging_dock/model.sdf
+    ArUco emissivo; pose Z alinhado com câmera
+
+worlds/test.world
+    Obstáculos estáticos; dock (2,0); luz fill_dock
+    Comentários de posição atualizados com novo spawn
+
+================================================================================
+ATENÇÃO — LIÇÕES APRENDIDAS
+================================================================================
+
+- NÃO usar pkill dentro do launch file (mata o próprio processo)
+- wait_for_server() em callbacks bloqueia o executor → usar server_is_ready() + _once()
+- navigate_to_staging_pose=True dá resultado mais preciso do que navegar manualmente
+- docking_threshold muito apertado (0.02) impede DockRobot de declarar sucesso
+- Odom frame drift: spawn em (1,0) reduz distância de navegação (menos erro acumulado)
 ================================================================================
