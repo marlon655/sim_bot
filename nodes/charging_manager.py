@@ -3,8 +3,10 @@
 charging_manager.py — palmares_bot: bateria, fila de tarefas e dock como home.
 
 Ciclo:
-  STARTUP (15 s) → HOME_CHARGING (dock simulado)
-  Tarefa na fila + bat ≥ 40 % → UNDOCKING → GOING_TO_TASK → EXECUTING_TASK → HOME
+  STARTUP (30 s) → RETURNING_HOME → DOCKING → HOME_CHARGING
+  Ocioso (fila vazia ou bat < 40%) → permanece em HOME_CHARGING (dock)
+  Tarefa na fila + bat ≥ 40 % → UNDOCKING → GOING_TO_TASK → EXECUTING_TASK
+                               → RETURNING_HOME → DOCKING → HOME_CHARGING
   bat < 20 % após tarefa → retorna imediatamente
   bat ≤  5 % durante tarefa → emergência, aborta e retorna
 
@@ -55,15 +57,21 @@ LOW_AFTER     = 20.0  # % → forçar retorno após tarefa
 EMERGENCY     = 5.0   # % → abortar tarefa imediatamente
 
 # ── Dock / Staging ─────────────────────────────────────────────────────────────
-# Robot spawns at world(1,0) = odom(0,0) = staging. Dock at world(2,0) = odom(1,0).
-STAGING_X        = 0.0
+# Galpão de fábrica (warehouse 30×50 m). Spawn world(0,0) = odom(0,0).
+# Dock world(13,0) = odom(13,0), parede direita do galpão.
+# Staging odom(12,0) — 1 m à frente, calculado pelo docking server.
+STAGING_X        = 12.0
 STAGING_Y        = 0.0
 STAGING_YAW      = 0.0
-DOCK_MAX_FAILS   = 4    # tentativas totais antes de forçar HOME_CHARGING
+DOCK_MAX_FAILS   = 4    # retries antes de pausa longa (nunca força HOME sem estar lá)
 
-# Alinhamento pós-docking — robô só entra em HOME_CHARGING se estiver reto
-DOCK_Y_ODOM    = 0.0   # y esperado do robô dockado (odom)
-ALIGN_TOL_Y    = 0.05  # m   — 5 cm lateral
+# Verificação física de docking — HOME_CHARGING SOMENTE quando o robô está
+# fisicamente próximo do dock. Resolve o bug onde spawn em (0,0,yaw=0)
+# passava na checagem de Y+yaw e entrava em HOME_CHARGING longe do dock.
+# Dock em odom(13,0). Robot para ~30cm à frente da face: odom X ≈ 12.9.
+DOCK_X_ODOM    = 12.7  # X esperado do robô dockado (odom)
+DOCK_Y_ODOM    = 0.0   # Y esperado do robô dockado (odom)
+ALIGN_TOL_XY   = 0.5   # m   — raio 2D: deve estar ≤ 50cm do dock (bloqueia spawn em X=0)
 ALIGN_TOL_YAW  = 0.17  # rad — ≈ 10° angular
 
 CTR_SAMPLE_S     = 2.0
@@ -75,18 +83,18 @@ UNDOCK_SPEED     = -0.15   # m/s
 UNDOCK_DURATION  = 2.0     # s  →  recua ~30 cm
 
 # ── Rotas de patrulha (x, y, yaw_rad em odom) ────────────────────────────────
-# Coordenadas no novo frame: spawn odom(0,0) = world(1,0). Área livre: x<0.
-# Obstáculos (odom): box1(-2.5,1.5), cyl1(-3,-1), box2(-0.8,2.5),
-#                    cyl2(-1.8,-1.8), box3(-3.5,0.5), box4(-2,-2.5)
+# Galpão de fábrica. odom = world (spawn em world origin).
+# Área de trabalho: central/esquerda do galpão (odom x < 10).
+# Dock em odom(13,0) — rotas ficam distantes do dock.
 PATROL_ROUTES: dict = {
-    'A': [(-1.5, 1.0, 0.0),  (-2.0, 0.0, 1.57),  (-1.5, -1.0, 3.14)],
-    'B': [(-1.0, -0.5, 0.0), (-2.5, -0.5, 1.57), (-2.0,  1.0, 0.0) ],
-    'C': [(-2.0,  0.5, 0.0), (-1.0,  1.5, -1.57),(-1.5, -0.5, 0.0) ],
+    'A': [(3.0, 7.0, 0.0),   (-4.0, 7.0,  1.57),  (-4.0, -7.0, 3.14)],
+    'B': [(-2.0, 3.0, 0.0),  (-7.0, 0.0,  0.0),   (-2.0, -3.0, 0.0) ],
+    'C': [(5.0, -5.0, 0.0),  (-3.0, -5.0, 1.57),  (-3.0,  5.0, 0.0) ],
 }
 
 TASK_WAIT_S = {'goto_pose': 2, 'inspect': 5, 'deliver': 3, 'patrol': 0}
 
-AUTOSTART_DELAY = 15.0  # s após startup (aguarda Nav2 e docking server)
+AUTOSTART_DELAY = 30.0  # s após startup (Nav2 t=20s, docking server t=25s)
 
 
 @dataclass
@@ -129,6 +137,7 @@ class ChargingManager(Node):
         self._centering_samples: list = []
         self._centering_timer   = None
         self._centering_sub     = None
+        self._robot_x: Optional[float]   = None
         self._robot_y: Optional[float]   = None
         self._robot_yaw: Optional[float] = None
 
@@ -167,11 +176,10 @@ class ChargingManager(Node):
         self.get_logger().info(f'→ {s}  (bat={self._battery:.1f}%)')
 
     def _odom_cb(self, msg: Odometry):
-        self._robot_y = msg.pose.pose.position.y
+        self._robot_x   = msg.pose.pose.position.x
+        self._robot_y   = msg.pose.pose.position.y
         qz, qw = msg.pose.pose.orientation.z, msg.pose.pose.orientation.w
         self._robot_yaw = 2.0 * math.atan2(qz, qw)
-
-    # _is_aligned removido — confiamos no docking server (DockRobot status=4 = ok)
 
     # ── Bateria ────────────────────────────────────────────────────────────────
     def _battery_tick(self):
@@ -249,9 +257,8 @@ class ChargingManager(Node):
     def _autostart(self):
         if self._state == STARTUP:
             self.get_logger().info(
-                'Iniciando em HOME_CHARGING (dock simulado desde o spawn). '
-                'Aceita tarefas quando bat ≥ 40%.')
-            self._set_state(HOME_CHARGING)
+                'Startup: navegando até a base de carregamento (factory world).')
+            self._start_returning_home()
 
     # ── NAVIGATING_TO_STAGING ─────────────────────────────────────────────────
     def _navigate_to_staging(self):
@@ -334,39 +341,47 @@ class ChargingManager(Node):
         if f.result().status != 4:
             self._dock_retries += 1
             if self._dock_retries >= DOCK_MAX_FAILS:
-                self.get_logger().warn(
-                    f'DockRobot falhou {DOCK_MAX_FAILS}× — forçando HOME_CHARGING.')
+                self.get_logger().error(
+                    f'DockRobot falhou {DOCK_MAX_FAILS}× — pausa 15 s antes de retentar.')
                 self._dock_retries = 0
-                self._set_state(HOME_CHARGING)
+                self._once(15.0, self._start_docking)
             else:
                 self.get_logger().warn(
                     f'Docking falhou ({self._dock_retries}/{DOCK_MAX_FAILS}) — retry em 3 s')
                 self._once(3.0, self._start_docking)
             return
 
-        # DockRobot declarou sucesso — verificar alinhamento (Y e yaw)
-        y_err   = abs((self._robot_y  or 0.0) - DOCK_Y_ODOM)
+        # DockRobot declarou sucesso — verificar posição FÍSICA (2D + yaw).
+        # HOME_CHARGING só é definido se o robô estiver ≤ ALIGN_TOL_XY do dock.
+        # Isso impede o bug onde spawn em odom(0,0,yaw=0) passava a checagem
+        # de Y+yaw e entrava em HOME_CHARGING longe do dock.
+        x_err   = (self._robot_x   or 0.0) - DOCK_X_ODOM
+        y_err   = (self._robot_y   or 0.0) - DOCK_Y_ODOM
+        dist    = math.sqrt(x_err**2 + y_err**2)
         yaw_err = abs(self._robot_yaw or 0.0)
-        aligned = y_err <= ALIGN_TOL_Y and yaw_err <= ALIGN_TOL_YAW
+        aligned = dist <= ALIGN_TOL_XY and yaw_err <= ALIGN_TOL_YAW
 
         if not aligned:
             self._dock_retries += 1
             self.get_logger().warn(
-                f'Robô torto após docking  y_err={y_err:.3f}m '
-                f'yaw={math.degrees(yaw_err):.1f}°  '
+                f'Robô longe do dock após docking  dist={dist:.2f}m '
+                f'yaw={math.degrees(yaw_err):.1f}°  pos=({(self._robot_x or 0):.1f},'
+                f'{(self._robot_y or 0):.1f})  '
                 f'({self._dock_retries}/{DOCK_MAX_FAILS}) — retry em 3 s')
             if self._dock_retries >= DOCK_MAX_FAILS:
-                self.get_logger().warn('Limite de realinhamentos — forçando HOME_CHARGING.')
+                self.get_logger().error(
+                    f'Máx retries: robô ainda a {dist:.2f}m do dock — pausa 15 s.')
                 self._dock_retries = 0
-                self._set_state(HOME_CHARGING)
+                self._once(15.0, self._start_docking)
             else:
                 self._once(3.0, self._start_docking)
             return
 
         self._dock_retries = 0
         self.get_logger().info(
-            f'Dockado e alinhado ✓  y_err={y_err:.3f}m  '
-            f'yaw={math.degrees(yaw_err):.1f}°  bat={self._battery:.1f}%')
+            f'Dockado ✓  dist={dist:.2f}m  yaw={math.degrees(yaw_err):.1f}°  '
+            f'pos=({(self._robot_x or 0):.2f},{(self._robot_y or 0):.2f})  '
+            f'bat={self._battery:.1f}%')
         self._set_state(HOME_CHARGING)
 
     # ── UNDOCKING → tarefa (reverse simples, sem ação ROS) ───────────────────

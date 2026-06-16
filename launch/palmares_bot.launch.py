@@ -37,7 +37,7 @@ def generate_launch_description():
 
     # Path to default world
     world_path = os.path.join(
-        get_package_share_directory(package_name), 'worlds', 'test.world')
+        get_package_share_directory(package_name), 'worlds', 'factory.world')
 
     # Launch Arguments
     declare_world = DeclareLaunchArgument(
@@ -124,14 +124,15 @@ def generate_launch_description():
     )
 
     # ── Spawn palmares_bot ────────────────────────────────────────────────
-    # Spawns at world(1.0, 0.0) = 1 m in front of dock (staging area).
-    # This makes odom(0,0) = staging, odom(1,0) = dock. Robot faces +X (dock).
+    # Nasce no centro do galpão (world 0,0) = odom(0,0).
+    # Dock em world(13,0) = odom(13,0). Staging em odom(12,0).
+    # Robot faces +X (direção do dock na parede direita).
     spawn_palmares_bot = Node(
         package='ros_gz_sim',
         executable='create',
         arguments=['-topic', 'robot_description',
                    '-name', 'palmares_bot',
-                   '-x', '1.0',
+                   '-x', '0.0',
                    '-y', '0.0',
                    '-z', '0.15',
                    '-Y', '0.0'],

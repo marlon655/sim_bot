@@ -67,5 +67,6 @@ docking_server:
     base_carregamento:
       type: 'charging_dock'
       frame: 'odom'
-      # Robot spawns at world (1,0) = odom (0,0). Dock at world (2,0) = odom (1,0).
-      pose: [1.0, 0.0, 0.0]
+      # Robot spawns at world(0,0) = odom(0,0). Dock at world(13,0) = odom(13,0).
+      # Staging = odom(12,0) — 1 m à frente, computado pelo docking server.
+      pose: [13.0, 0.0, 0.0]
