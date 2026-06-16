@@ -16,7 +16,7 @@ docking_server:
     base_frame: base_link
     fixed_frame: odom
     dock_backwards: false
-    dock_prestaging_tolerance: 0.25     # m – Nav2 must navigate to staging area
+    dock_prestaging_tolerance: 0.5      # m – must be > xy_goal_tolerance (0.25) to avoid borderline fail
 
     # ── Graceful controller ──────────────────────────────────────────────
     controller:
