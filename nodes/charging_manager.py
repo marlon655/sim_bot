@@ -71,9 +71,7 @@ DOCK_MAX_FAILS   = 4    # retries antes de pausa longa (nunca força HOME sem es
 # Dock em odom(13,0). Robot para ~30cm à frente da face: odom X ≈ 12.9.
 DOCK_X_ODOM    = 12.7  # X esperado do robô dockado (odom)
 DOCK_Y_ODOM    = 0.0   # Y esperado do robô dockado (odom)
-ALIGN_TOL_XY   = 2.0   # m   — raio 2D: bloqueia spawn em X=0 (dist=12.7m), aceita variações de docking
-ALIGN_TOL_YAW  = 1.0   # rad — ≈ 57° — permissivo, evita falso-negativo por yaw residual
-DOCK_LOST_DIST = 1.0   # m   — se HOME_CHARGING e robô > 1m do dock → foi deslocado, retornar
+ALIGN_TOL_XY   = 2.0   # m   — raio 2D: robô perto do dock ao exceder DOCK_MAX_FAILS → força HOME_CHARGING
 
 CTR_SAMPLE_S     = 2.0
 CTR_DEAD_BAND    = 0.05
@@ -188,14 +186,6 @@ class ChargingManager(Node):
 
         if self._state == HOME_CHARGING:
             self._battery = min(100.0, self._battery + BATT_CHARGE)
-            if self._robot_x is not None:
-                dist = math.sqrt(
-                    (self._robot_x - DOCK_X_ODOM) ** 2 +
-                    (self._robot_y - DOCK_Y_ODOM) ** 2)
-                if dist > DOCK_LOST_DIST:
-                    self.get_logger().warn(
-                        f'HOME_CHARGING mas robô deslocado ({dist:.2f}m do dock) — retornando.')
-                    self._start_returning_home()
         elif self._state != STARTUP:
             self._battery = max(EMERGENCY, self._battery - BATT_DRAIN)
 
@@ -378,28 +368,10 @@ class ChargingManager(Node):
                 self._once(3.0, self._start_docking)
             return
 
-        # DockRobot status=4 — verificar alinhamento físico
-        yaw_err = abs(self._robot_yaw or 0.0)
-        aligned = dist <= ALIGN_TOL_XY and yaw_err <= ALIGN_TOL_YAW
-
-        if not aligned:
-            self._dock_retries += 1
-            self.get_logger().warn(
-                f'Fora de alinhamento após docking  dist={dist:.2f}m '
-                f'yaw={math.degrees(yaw_err):.1f}°  pos=({rx:.1f},{ry:.1f})  '
-                f'({self._dock_retries}/{DOCK_MAX_FAILS})')
-            if self._dock_retries >= DOCK_MAX_FAILS:
-                self.get_logger().warn('Máx realinhamentos — forçando HOME_CHARGING.')
-                self._dock_retries = 0
-                self._set_state(HOME_CHARGING)
-            else:
-                self._once(3.0, self._start_docking)
-            return
-
+        # DockRobot status=4 — docking confirmado pelo servidor (docking_threshold: 0.05 m)
         self._dock_retries = 0
         self.get_logger().info(
-            f'Dockado ✓  dist={dist:.2f}m  yaw={math.degrees(yaw_err):.1f}°  '
-            f'pos=({rx:.2f},{ry:.2f})  bat={self._battery:.1f}%')
+            f'Dockado ✓  dist={dist:.2f}m  pos=({rx:.2f},{ry:.2f})  bat={self._battery:.1f}%')
         self._set_state(HOME_CHARGING)
 
     # ── UNDOCKING → tarefa (reverse simples, sem ação ROS) ───────────────────

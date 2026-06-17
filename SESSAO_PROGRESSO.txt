@@ -1,6 +1,6 @@
 ================================================================================
   PROGRESSO DO PROJETO - Robot Docking Autonomo (sim_bot)
-  Atualizado em: 2026-06-16 (sessao 9)
+  Atualizado em: 2026-06-17 (sessao 10)
 ================================================================================
 
 OBJETIVO GERAL
@@ -8,6 +8,94 @@ OBJETIVO GERAL
 Robot autonomo (palmares_bot) realiza docking na estacao de carregamento
 (charging_dock) usando ArUco ID=771, bateria simulada e fila de tarefas.
 Stack: ROS2 Jazzy + Gazebo Harmonic + Nav2 + slam_toolbox + opennav_docking
+
+================================================================================
+SESSAO 10 -- 2026-06-17
+================================================================================
+
+OBJETIVO DA SESSAO 10:
+  Corrigir race conditions em callbacks async que causavam duplo DockRobot
+  (go_charge nao funcionava; segundo retorno ao dock ficava torto / em loop).
+
+MUDANCAS DA SESSAO 10:
+
+  1. [BUG FIX CRITICO] Race conditions em callbacks async (charging_manager.py)
+
+     PROBLEMA:
+       Quando /go_charge chegava durante GOING_TO_TASK ou EXECUTING_TASK,
+       callbacks ainda pendentes (timers + futures) disparavam apos mudanca
+       de estado e iniciavam um SEGUNDO DockRobot concorrente.
+       Com dois DockRobot competindo:
+         - Approach cabia: robot ia pra frente, dava re, voltava pra frente
+         - Segundo retorno ao dock ficava torto ou em loop infinito
+         - Primeiro retorno (startup, sem tarefa previa) funcionava pois
+           nao havia callbacks pendentes
+
+     CORRECAO -- adicionados state guards em 5 callbacks:
+       _task_nav_acc  : if state != GOING_TO_TASK: return
+       _task_nav_res  : if state != GOING_TO_TASK: return   (ja existia)
+       _patrol_wp_acc : if state != GOING_TO_TASK: return
+       _patrol_wp_res : if state != GOING_TO_TASK: return   (ja existia)
+       _finish_task   : if state != EXECUTING_TASK: return  <- BUG PRINCIPAL
+       _undock_done   : if state != UNDOCKING: return       (ja existia)
+       _dock_acc      : if state not in (DOCKING,RETURNING_HOME): return
+
+     BUG PRINCIPAL era _finish_task:
+       go_charge -> DOCKING. Timer de 2s disparava _finish_task (sem guard)
+       -> _start_returning_home() -> segundo DockRobot concorrente
+       -> chaos na abordagem = robo torto ou em loop
+
+  2. [DOCKING PARAMS] dock_prestaging_tolerance: 0.25 -> 0.5 m
+     - Nav2 xy_goal_tolerance=0.25m. Com tolerancias iguais, robo parava
+       exatamente na borda e o docking server rejeitava pre-staging.
+     - 0.5m garante folga apos longa navegacao (12 m no galpao fabrica).
+
+  3. [BUG FIX] _dock_res: removido check de alinhamento Y+yaw apos status=4
+
+     HISTORIA:
+       - Check y_err/yaw_err era do branch dock-carregamento (ambiente 1 m, sem drift)
+       - Aplicado no mundo fabrica (12 m+) causava FALHA por drift de odom SLAM:
+           robo FISICAMENTE correto no dock, mas odom reportava Y/yaw desviados
+           -> check falha -> retry com navigate_to_staging_pose=True
+           -> staging (12,0) esta ATRAS do robo ja em (12.7,0)
+           -> graceful controller empurrava robo pra frente infinitamente
+       - "Ta torto" era drift cosmético do SLAM no RViz, nao desalinhamento fisico
+
+     SOLUCAO DEFINITIVA:
+       - Removidos: DOCK_Y_ODOM, ALIGN_TOL_Y, ALIGN_TOL_YAW
+       - DockRobot status=4 + docking_threshold=0.05m sao o unico criterio
+       - dock_pose_estimator (ArUco+LiDAR) ja garante alinhamento fisico
+         independente do drift de odom
+
+  4. [REMOVIDO] DOCK_LOST_DIST check em _battery_tick
+     - Adicionado para detectar deslocamento do dock em HOME_CHARGING
+     - Causava loop infinito: SLAM drift fazia odom divergir das coordenadas
+       fixas DOCK_X/Y_ODOM -> check disparava mesmo robo fisicamente dockado
+     - Removido: confiamos em DockRobot; deslocamento manual exige /go_charge
+
+ESTADO FINAL DA SESSAO 10:
+
+  _dock_res (sucesso -- status=4):
+    -> loga dist e pos para diagnostico
+    -> _set_state(HOME_CHARGING) diretamente, sem verificacao adicional
+    -> confia no docking_threshold: 0.05 m do servidor
+
+  _dock_res (falha -- status!=4):
+    -> retenta ate DOCK_MAX_FAILS (4x), pausa 3 s entre tentativas
+    -> apos DOCK_MAX_FAILS: se dist(robo, dock) <= ALIGN_TOL_XY (2.0m)
+       forca HOME_CHARGING; senao pausa 15 s e retentar
+
+  go_charge:
+    -> bloqueado em HOME_CHARGING / DOCKING / RETURNING_HOME
+    -> nos demais estados: _task=None, _start_returning_home() imediato
+    -> callbacks pendentes retornam silenciosamente pelos state guards
+
+TOPICOS DE TAREFA (corrigido na sessao 10):
+  /task/goto_pose   geometry_msgs/msg/PoseStamped  (NAO /add_task)
+  /task/inspect     geometry_msgs/msg/PoseStamped
+  /task/patrol      std_msgs/msg/String ("A", "B" ou "C")
+  /task/deliver     geometry_msgs/msg/PoseStamped
+  /go_charge        std_msgs/msg/Empty
 
 ================================================================================
 SESSAO 9 -- 2026-06-16
@@ -164,7 +252,12 @@ O QUE ESTA FUNCIONANDO (CONFIRMADO)
 [5] GALPAO DE FABRICA (SESSAO 9)
     - Warehouse 30x50 m com prateleiras e barreiras como obstaculos de Nav2
     - Dock na parede direita world(13,0), robo nasce em world(0,0)
-    - HOME_CHARGING so declarado quando dist <= 0.5m do dock (verificacao fisica)
+    - HOME_CHARGING declarado quando DockRobot retorna status=4 (docking_threshold=0.05m)
+
+[6] CICLO COMPLETO COM TAREFAS (SESSAO 10)
+    - go_charge funciona em qualquer estado de tarefa (GOING_TO_TASK, EXECUTING_TASK)
+    - State guards em callbacks async previnem duplo DockRobot
+    - Segundo retorno ao dock alinha corretamente (igual ao primeiro)
 
 ================================================================================
 COMO INICIAR E EXECUTAR (SESSAO 9+)
@@ -290,15 +383,16 @@ NAVEGACAO:
   Global costmap:          25x25 m, origin(-5,-12)
 
 DOCKING:
-  Dock frame/pose:         odom / [13.0, 0.0, 0.0]
+  Dock frame/pose:          odom / [13.0, 0.0, 0.0]
   navigate_to_staging_pose: true
-  staging_x_offset:        -1.0 m
-  docking_threshold:       0.05 m
-  DOCK_X_ODOM:             12.7 m
-  DOCK_Y_ODOM:             0.0 m
-  ALIGN_TOL_XY:            0.5 m  (raio 2D -- substitui ALIGN_TOL_Y)
-  ALIGN_TOL_YAW:           0.17 rad (10 graus)
-  DOCK_MAX_FAILS:          4 (falha 4x -> pausa 15s -> retentar, nunca forca HOME)
+  staging_x_offset:         -1.0 m  (staging = odom 12,0)
+  docking_threshold:        0.05 m  (unico criterio de sucesso)
+  dock_prestaging_tolerance: 0.5 m  (> xy_goal_tolerance=0.25m)
+  DOCK_X_ODOM:              12.7 m  (para log e dist check em falha)
+  DOCK_Y_ODOM:              0.0 m
+  ALIGN_TOL_XY:             2.0 m   (raio para forcar HOME_CHARGING apos DOCK_MAX_FAILS)
+  DOCK_MAX_FAILS:           4 (falha 4x + dist<=2m -> forca HOME; dist>2m -> pausa 15s)
+  SEM check de Y/yaw apos status=4 (SLAM drift invalida verificacao em odom)
 
 BATERIA:
   Drain:  0.5%/s  -> 100->0 em 200 s
@@ -380,12 +474,20 @@ ATENCAO -- LICOES APRENDIDAS
 - wait_for_server() em callbacks bloqueia o executor -> usar server_is_ready() + _once()
 - navigate_to_staging_pose=True da resultado mais preciso que navegar manualmente
 - docking_threshold muito apertado (0.02) impede DockRobot de declarar sucesso
-- Verificar POSICAO FISICA (2D) antes de declarar HOME_CHARGING:
-    checar so Y e yaw permite que spawn em (0,0,yaw=0) passe a verificacao
-    solucao: dist 2D = sqrt(dx^2+dy^2) <= tolerancia (bloqueia posicoes distantes)
-- Nunca forcar HOME_CHARGING em fallback de falha de docking:
-    o robo pode estar longe do dock quando DockRobot falha repetidamente
-    solucao: pausa + retentar (nao assume estado sem confirmacao fisica)
+- SLAM drift invalida verificacao de Y/yaw via odom em ambientes grandes (>5m):
+    check y_err/yaw_err funciona apenas em ambientes minimos (drift ~0)
+    no mundo fabrica (12m+) o drift quebra o check -> loop de retry -> robo empurra pra frente
+    SOLUCAO: confiar em DockRobot status=4 + docking_threshold como unico criterio
+- dock_pose_estimator usa ArUco+LiDAR (dados absolutos) -> alinhamento fisico e correto
+    independente do drift de odom; "torto" no RViz e drift cosmético do SLAM
+- dock_prestaging_tolerance deve ser MAIOR que xy_goal_tolerance do Nav2:
+    iguais causam falha intermitente (robo para exatamente na borda da tolerancia)
+    usar dock_prestaging_tolerance = 2x xy_goal_tolerance
+- State guards em TODOS os callbacks async que chamam _start_returning_home():
+    _finish_task, _task_nav_acc, _patrol_wp_acc, _dock_acc
+    sem guards: go_charge + timer pendente = dois DockRobot concorrentes = chaos
+- Nunca forcar HOME_CHARGING em fallback de falha de docking longe do dock:
+    verificar dist 2D antes de forcar estado
 - AUTOSTART_DELAY deve ser > tempo de inicializacao do docking server (25 s):
     usar 30 s garante que Nav2 e docking server estejam prontos
 ================================================================================
