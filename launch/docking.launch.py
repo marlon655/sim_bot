@@ -9,7 +9,7 @@ def generate_launch_description():
     pkg = get_package_share_directory('sim_bot')
     docking_params = os.path.join(pkg, 'config', 'docking_params.yaml')
 
-    # ── Dock pose estimator (ArUco Phase 1 + LiDAR Phase 2) ──────────────
+    # ── Dock pose estimator (LiDAR-only) ─────────────────────────────────
     dock_estimator = Node(
         package='sim_bot',
         executable='dock_pose_estimator.py',
@@ -17,12 +17,9 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time':      True,
-            'marker_id':         771,
-            'marker_size':       0.15,   # outer black border [m] — panel 0.20 m, quiet zone 0.025 m/side
-            'stop_distance':     0.30,   # robot_front(0.252) + 5cm gap = 0.302 ≈ 0.30 m
-            'aruco_timeout':     2.0,    # s – LiDAR takes over after ArUco lost (longer = ArUco stays primary)
-            'sector_half_deg':   30.0,   # normal LiDAR sector half-angle
-            'close_sector_deg':  60.0,   # wide sector used when range < close_range_m
+            'stop_distance':     0.42,   # test
+            'sector_half_deg':   30.0,   # normal frontal sector half-angle
+            'close_sector_deg':  60.0,   # wide sector for lateral edge detection at close range
             'close_range_m':     0.5,    # switch to wide sector below this range
         }]
     )

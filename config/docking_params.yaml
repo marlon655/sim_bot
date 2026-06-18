@@ -1,6 +1,11 @@
 # ══════════════════════════════════════════════════════════════════════════
 #  opennav_docking – DockingServer + SimpleChargingDock parameters
-#  for Palmares robot docking to base_carregamento via ArUco ID=771 + LiDAR
+#  for Palmares robot docking to base_carregamento via LiDAR-only
+#
+#  Stop distance geometry (LiDAR-only):
+#    dock_pose_estimator publishes target at: face_odom_x - stop_distance
+#    stop_distance = 0.47 m  (empirical: 0.42 m = touching → +5 cm = 5 cm gap)
+#    target_x = 13.235 - 0.47 = 12.765 m
 # ══════════════════════════════════════════════════════════════════════════
 
 docking_server:
@@ -19,15 +24,18 @@ docking_server:
     dock_prestaging_tolerance: 0.5      # m – must be > xy_goal_tolerance (0.25) to avoid borderline fail
 
     # ── Graceful controller ──────────────────────────────────────────────
+    # Robot arrives at staging already aligned (yaw≈0, Y≈0) via the two-step
+    # pre-align navigation in charging_manager. The approach is ~0.93 m straight
+    # with only ~4 cm Y correction. Low k_phi/k_delta prevents over-steering.
     controller:
-      k_phi: 3.0
-      k_delta: 2.0
+      k_phi: 2.5        # heading gain — strong enough to correct yaw over ~0.8 m approach
+      k_delta: 0.3      # lateral gain — low value = straight approach, minimal yaw deviation
       beta: 0.4
       lambda: 2.0
-      v_linear_min: 0.06
-      v_linear_max: 0.18
-      v_angular_max: 0.6
-      slowdown_radius: 0.4
+      v_linear_min: 0.05
+      v_linear_max: 0.15
+      v_angular_max: 0.4
+      slowdown_radius: 0.5   # start braking earlier (0.5 m from target)
       use_collision_detection: false    # disable during final dock approach
 
     # ── Dock plugin registration ─────────────────────────────────────────
@@ -36,22 +44,24 @@ docking_server:
     charging_dock:
       plugin: 'opennav_docking::SimpleChargingDock'
 
-      # Use our dock_pose_estimator node (ArUco → LiDAR fusion)
+      # Use dock_pose_estimator (LiDAR-only) — subscribes to /detected_dock_pose
       use_external_detection_pose: true
-      external_detection_timeout: 2.0   # s – fallback if estimator stalls
+      external_detection_timeout: 5.0   # s – blind-zone keepalive covers the gap; 5 s for safety
 
-      # The estimator already publishes the correct robot approach pose
-      # (marker_pos - STOP_DISTANCE in approach direction), so zero offsets.
+      # Estimator publishes approach target already offset by stop_distance.
+      # No Y translation: robot approaches straight along X axis (yaw=0).
       external_detection_translation_x: 0.0
-      external_detection_translation_y: -0.04
+      external_detection_translation_y: 0.0
       external_detection_rotation_yaw: 0.0
       external_detection_rotation_pitch: 0.0
       external_detection_rotation_roll: 0.0
-      filter_coef: 0.1                  # low-pass filter on detected pose
+      filter_coef: 0.5                  # EMA on detected pose — fast enough to settle before robot arrives
 
-      # Stop when robot center is within 5 cm of the published dock pose.
-      # dock_pose_estimator offsets the target so 5 cm lands before contact.
-      docking_threshold: 0.05           # m – isDocked() = true threshold (5 cm, tolerante a erros do estimador)
+      # isDocked() = true when robot centre is within this distance of published target.
+      # target = face_x - 0.35 m, robot_front_offset = 0.252 m
+      # stop gap = 0.35 - 0.252 = 0.098 m ≈ 10 cm (nominal)
+      # worst-case overshoot (+5 cm): 0.35 - 0.252 - 0.05 = 0.048 m ≈ 5 cm (≥5 cm ✓)
+      docking_threshold: 0.05           # m — reliable for graceful controller at v_linear_min=0.05
 
       # Staging pose: 1.0 m in front of dock face (dock at 2.0 m, staging at ~1.0 m)
       staging_x_offset: -1.0            # m – negative = toward robot

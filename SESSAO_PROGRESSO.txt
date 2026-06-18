@@ -1,13 +1,332 @@
 ================================================================================
   PROGRESSO DO PROJETO - Robot Docking Autonomo (sim_bot)
-  Atualizado em: 2026-06-17 (sessao 10)
+  Atualizado em: 2026-06-18 (sessao 13)
 ================================================================================
 
 OBJETIVO GERAL
 --------------
 Robot autonomo (palmares_bot) realiza docking na estacao de carregamento
-(charging_dock) usando ArUco ID=771, bateria simulada e fila de tarefas.
+(charging_dock) somente com LiDAR (camera removida), bateria simulada e
+fila de tarefas.
 Stack: ROS2 Jazzy + Gazebo Harmonic + Nav2 + slam_toolbox + opennav_docking
+
+================================================================================
+SESSAO 13 -- 2026-06-18
+================================================================================
+
+OBJETIVO DA SESSAO 13:
+  1. Afinar stop_distance por teste empirico (0.42 atropelava, 0.43 ok na S12).
+  2. Corrigir robo chegando torto (desalinhado em yaw no final da abordagem).
+  3. Corrigir robo deslocado para a esquerda (+Y) em relacao ao centro da dock.
+  4. Tornar stop_distance um parametro dinamico (sem rebuild/restart para testar).
+
+MUDANCAS DA SESSAO 13:
+
+  1. [PARAMETRO DINAMICO] nodes/dock_pose_estimator.py — stop_distance em runtime
+
+     Adicionado add_on_set_parameters_callback(_on_param_change).
+     Aceita atualizacao de stop_distance e dock_y_odom sem reiniciar o node.
+
+     Uso em runtime (sem rebuild, sem restart):
+       ros2 param set /dock_pose_estimator stop_distance 0.42
+
+  2. [BUG FIX] nodes/dock_pose_estimator.py — deslocamento lateral (esquerda)
+
+     CAUSA RAIZ:
+       target_y era calculado como "oy" (Y detectado do dock via LiDAR+TF).
+       O oy carregava o offset Y do proprio robo no staging: se o robo chegava
+       ao staging em Y=+0.03 m (dentro da tolerancia do Nav2 de 0.25 m), o
+       LiDAR estimava o centro do dock em oy=+0.03 m (em vez de 0.0 m real).
+       O graceful controller levava o robo para Y=+0.03 m -> deslocado para
+       a esquerda em relacao ao centro da dock.
+
+     CORRECAO:
+       Adicionado parametro dock_y_odom (default 0.0).
+       target_y = self.DOCK_Y_ODOM  (fixo, dock estatica em Y=0)
+       em vez de target_y = oy (dinamico, contaminado pela posicao do robo).
+
+       A dock e estatica em odom Y=0 — usar Y detectado e incorreto pois o
+       sensor esta no robo (posicao variavel), nao na dock.
+
+  3. [CONTROLADOR] config/docking_params.yaml — abordagem mais reta
+
+     k_phi:   1.5  -> 2.5   (correcao de heading mais forte — alinha yaw no final)
+     k_delta: 1.0  -> 0.3   (correcao lateral minima — menos desvio de yaw durante
+                              a abordagem de ~0.8 m)
+     external_detection_translation_y: -0.04 -> 0.0
+       (remocao do offset de assimetria de chassis — substituido pelo dock_y_odom fixo)
+
+  4. [AUTOSTART] nodes/charging_manager.py
+     AUTOSTART_DELAY: 30 -> 45 s
+     Margem extra para maquinas mais lentas (Gazebo pode demorar >30 s para subir).
+
+  5. [AFERICAO] launch/docking.launch.py — stop_distance ajustado por biseccao
+
+     Testes empiricos (dock face em 13.235 m):
+       0.52 m -> distancia grande demais
+       0.47 m -> distancia grande demais
+       0.45 m -> distancia grande demais
+       0.44 m -> ok mas com folga
+       0.43 m -> ok  (confirmado na S12)
+       0.42 m -> atropelava (antes do fix de Y)
+       0.41 m -> atropelava
+       0.42 m -> OK apos fix de Y (stop_distance final)
+
+     Valor final: 0.42 m
+     Nota: mesmo valor que atropelava antes do fix de target_y. O fix de Y
+     corrigiu a trajetoria e o 0.42 passou a funcionar.
+
+ESTADO FINAL DA SESSAO 13:
+
+  [9] ABORDAGEM RETA E CENTRADA
+      - target_y fixo em dock_y_odom=0.0 (nao mais contaminado pelo offset do robo)
+      - k_phi=2.5, k_delta=0.3: corrige yaw sem desviar lateralmente
+      - external_detection_translation_y=0.0 (correcao anterior substituida por dock_y_odom)
+      - stop_distance=0.42 m validado empiricamente
+
+  [10] STOP_DISTANCE DINAMICO
+      - ros2 param set /dock_pose_estimator stop_distance <valor>
+      - Atualiza em runtime sem rebuild nem restart do Gazebo
+
+================================================================================
+ATENCAO -- LICOES APRENDIDAS (SESSAO 13)
+================================================================================
+
+- target_y do estimador NAO deve usar o Y detectado via LiDAR quando a dock e estatica:
+  o LiDAR esta no robo (posicao variavel) -> o oy em odom reflete o offset Y do robo.
+  SEMPRE usar um valor fixo (dock_y_odom) para a componente Y do target quando o
+  dock esta em posicao conhecida e estatica em odom.
+
+- external_detection_translation_y nao substitui dock_y_odom:
+  o translation_y corrige apenas um bias constante; o bias real e proporcional ao
+  erro de Y do robo no staging (variavel). dock_y_odom resolve o problema na raiz.
+
+- k_delta alto (1.0+) com abordagem curta (~0.8 m) causa yaw residual no final:
+  o controlador graceful tenta corrigir ΔY fazendo uma curva -> chega com yaw != 0.
+  Com k_delta=0.3 e dock_y_odom correto (ΔY ≈ 0): abordagem quase linear, yaw final ≈ 0.
+
+- Para biseccao eficiente de parametros numericos: usar ros2 param set em vez de
+  rebuild + restart. Implementar add_on_set_parameters_callback no node alvo.
+
+================================================================================
+SESSAO 12 -- 2026-06-18
+================================================================================
+
+OBJETIVO DA SESSAO 12:
+  Corrigir robo que continuava atropelando a dock apos as correcoes da S11.
+
+CAUSA RAIZ IDENTIFICADA -- zona cega do LiDAR com valores clamped pelo Gazebo:
+
+  O sensor GPU lidar do Gazebo Harmonic retorna EXATAMENTE range_min (0.30 m)
+  para objetos na zona cega (< 0.30 m do sensor), em vez de retornar um valor
+  abaixo de range_min como esperado pela especificacao LaserScan.
+
+  O filtro anterior usava "r < msg.range_min" (estritamente menor).
+  Com r = range_min = 0.3, a condicao "0.3 < 0.3" e FALSA -> ponto passa!
+
+  Resultado com pontos clamped passando:
+    face_x (laser) = 0.30 m  (errado; real = ~0.19 m quando robo em 12.85 m)
+    ox (odom)      = 13.344 m (errado; real = 13.235 m)
+    target_x       = 13.344 - 0.36 = 12.984 m  (deveria ser 12.875 m)
+    frente do robo = 12.984 + 0.252 = 13.236 m > face do dock 13.235 m
+    -> COLISAO garantida no pior caso!
+
+MUDANCAS DA SESSAO 12:
+
+  1. [BUG FIX CRITICO] nodes/dock_pose_estimator.py — filtro de zona cega
+
+     ANTES:  r < msg.range_min  (estritamente menor — deixa clamped passarem)
+     DEPOIS: r <= msg.range_min (menor ou igual — exclui valores clamped)
+
+     Mudado nos DOIS loops: primeiro passo (±30°) e segundo passo (setor escolhido).
+
+     Adicionado guard duplo apos o primeiro passo:
+       if not math.isfinite(min_range) or min_range <= msg.range_min:
+           self._publish_cached()
+           return
+
+     Comportamento com a correcao:
+       - Pontos clamped (r=0.3) excluidos pelo filtro <= range_min
+       - min_range = inf (nenhum ponto valido acima de range_min)
+       - Cache publicado com target correto (12.815 m)
+       - Robo para antes da face; sem colisao
+
+  2. [PARAMETRO] launch/docking.launch.py — stop_distance aumentado
+
+     0.36 -> 0.42 m
+
+     Matematica revisada (com threshold=0.05 e robot_front=0.252):
+       target_x  = 13.235 - 0.42 = 12.815 m
+       gap_nominal = 13.235 - (12.815 + 0.252) = 0.168 m = 16.8 cm
+       gap_worst   = 0.168 - 0.05 = 0.118 m = 11.8 cm  (> 5 cm OK)
+
+     Com 0.36 o gap_worst era 5.8 cm (ok na teoria, mas sem margem para o bug
+     de clamping). Com 0.42 ha 6 cm extras de folga.
+
+  3. [COMENTARIO] config/docking_params.yaml — cabecalho atualizado
+     Geometria de parada refletindo stop_distance=0.42 m.
+
+ESTADO FINAL DA SESSAO 12:
+
+  [8] BUG DE ZONA CEGA CORRIGIDO
+      - Filtro r <= range_min exclui retornos clamped do Gazebo GPU lidar
+      - Guard duplo: cache quando min_range infinito OU clamped
+      - stop_distance=0.42 -> gap minimo 11.8 cm (> 5 cm garantido)
+      - Cache keepalive continua ativo durante a zona cega real (dist < 6 cm da face)
+
+================================================================================
+ATENCAO -- LICOES APRENDIDAS (SESSAO 12)
+================================================================================
+
+- Gazebo Harmonic GPU lidar clampeia objetos na zona cega para EXATAMENTE range_min,
+  nao para um valor abaixo de range_min como a especificacao LaserScan sugere.
+  SEMPRE usar "r <= msg.range_min" para excluir esses retornos falsos.
+  "r < msg.range_min" e incorreto para sensores Gazebo (deixa clamped passarem).
+
+- Margem de seguranca no stop_distance e essencial: usar apenas o minimo teorico
+  (0.352 m) sem folga significa que qualquer bug de estimacao (como o clamping)
+  causa colisao. Usar stop_distance = minimo + 0.06 m de folga.
+
+================================================================================
+SESSAO 11 -- 2026-06-17
+================================================================================
+
+OBJETIVO DA SESSAO 11:
+  1. Substituir deteccao ArUco por LiDAR-only (sem camera).
+  2. Corrigir robo que empurrava a base para se alinhar (inaceitavel em uso real).
+  3. Corrigir robo que atropelava a base (nao parava antes da estrutura).
+  4. Corrigir robo que andava infinitamente sem parar (loop de retry).
+
+MUDANCAS DA SESSAO 11:
+
+  1. [REESCRITA] nodes/dock_pose_estimator.py — LiDAR-only
+
+     ANTES:  Usava ArUco (cv_bridge, cv2, CameraInfo, Image) + LiDAR como fallback.
+     DEPOIS: Somente LiDAR — algoritmo em dois passos:
+
+       Passo 1 (±30°): acha min_range no setor frontal.
+       Passo 2: usa setor ±60° se min_range <= 0.5 m (captura largura total 0.6 m).
+       face_x:   media da faixa central ±20° (estavel contra raios obliquos).
+       center_y: ponto medio aresta-aresta (ou media se spread < 15 cm).
+       Yaw fixo em 0.0 (face perpendicular ao eixo X em odom — mais estavel que SVD).
+       Transformacao laser_frame -> odom via TF2.
+       Publica: (face_odom_x - stop_distance,  center_y_odom,  yaw=0).
+
+     [NOVO] Cache de zona cega:
+       LiDAR fica cego quando robo esta a < 0.30m da face (min_range do sensor).
+       Como o LiDAR esta a 0.194m a frente do base_link, a zona cega comeca
+       quando a face do dock esta a < 0.30 + 0.194 = 0.494m do base_link (24 cm da face).
+       Sem cache: docking server nao recebe pose por >2s -> fallback para YAML pose
+       [13.0, 0.0] -> robo tenta ir para X=13.0 -> colisao com face em X=13.235!
+       SOLUCAO: _cached_target_{x,y,yaw} armazenado a cada publicacao valida.
+       _publish_cached() chamado em cada early-return do _scan_cb (zona cega, sem cluster).
+       Keepalive a ~10 Hz (frequencia do LiDAR) mantem external_detection ativo.
+
+     Removidos: import cv2, cv_bridge, Image, CameraInfo, ArUco, last_aruco_t, last_dock_odom.
+     Adicionado: parametro close_range_m=0.5 com <= (nao <) para o limite exato.
+
+  2. [MODIFICADO] models/charging_dock/model.sdf — ArUco removido
+
+     Removida tag <visual> do painel ArUco (o marker nao existia fisicamente).
+     Mantidos: body_visual (mesh STL) e body_collision (box 0.355x0.600x0.470 m).
+     Face proxima do dock (lado que o robo aborda):
+       local X = 0.4125 - 0.355/2 = 0.235 m
+       odom  X = 13.0 + 0.235 = 13.235 m  <- dock face em odom
+
+  3. [REFATORADO] nodes/charging_manager.py — pre-alinhamento em dois passos
+
+     PROBLEMA ANTERIOR:
+       DockRobot com navigate_to_staging_pose=True: robo chegava ao staging com
+       yaw e Y errados (vinha de qualquer direcao). O graceful controller corrigia
+       yaw + Y simultaneamente durante a abordagem -> empurrava a face do dock
+       lateralmente para se alinhar -> inaceitavel em uso real.
+
+     SOLUCAO — abordagem em tres estagios:
+       Estagio 1: Nav2 -> odom(9.0, 0.0, yaw=0)  [PRE_ALIGN]
+                  Garante que o robo entra no corredor alinhado em yaw=0.
+       Estagio 2: Nav2 -> odom(12.0, 0.0, yaw=0) [STAGING]
+                  Percorre o corredor em linha reta, ΔY < 4 cm, yaw≈0.
+       Estagio 3: DockRobot(navigate_to_staging_pose=False)
+                  Robo ja alinhado -> graceful controller percorre apenas ~0.93 m
+                  com yaw≈0 e ΔY minimo -> sem empurrao lateral.
+
+     NOVO: navigate_to_staging_pose=False
+       Com True: em retry (apos DOCK_MAX_FAILS) o servidor mandava o robo voltar
+       ao staging (12.0) mesmo estando ja em (13.1,0) proximo da base -> backward
+       nav + caos. Com False: charging_manager ja posicionou o robo; sem navegacao
+       extra do servidor.
+
+     NOVO: DOCK_MAX_FAILS fallback chama _start_returning_home() (reposiciona)
+       Em vez de tentar DockRobot da posicao onde falhou, volta ao pre-alinhamento
+       completo para reensinar o corredor.
+
+     REMOVIDOS: NAVIGATING_TO_STAGING, CENTERING; CTR_SAMPLE_S, CTR_DEAD_BAND,
+     CTR_MAX_CORR; _centering_samples, _centering_timer, _centering_sub;
+     _navigate_to_staging, _staging_acc, _staging_res, _start_centering,
+     _ctr_pose_cb, _centering_done, _ctr_nav_cb.
+
+  4. [PARAMETROS] config/docking_params.yaml
+
+     filter_coef:           0.1 -> 0.5
+       CAUSA DO "ATROPELANDO":
+         Com 0.1 o EMA demora >3 s para convergir de 13.0 (pose YAML inicial)
+         para 12.875 (target real). O robo perseguia o target filtrado em 12.96+
+         e passava o ponto correto — ate mesmo com stop_distance=0.35.
+       Com 0.5 o filtro converge em ~1 s (antes de o robo percorrer 15 cm).
+       target = 12.875, filtro estabilizado antes de robo chegar perto.
+
+     docking_threshold:     0.05 -> 0.02 -> 0.05 (REVERTIDO)
+       Com 0.02: graceful controller nao conseguia precisao de 2 cm com
+       v_linear_min=0.05 m/s -> robot ultrapassava 2 cm -> isDocked() nunca
+       disparava -> approach timeout 45 s -> retry -> loop infinito de retentativas
+       ("andava infinitamente sem parar").
+       Com 0.05: threshold atingivel; isDocked() dispara de forma confiavel.
+
+     stop_distance:         0.30 -> 0.35 -> 0.36 m
+       Matematica de garantia de gap >= 5 cm:
+         stop_distance - robot_front(0.252) - threshold(0.05) >= 0.05
+         0.36 - 0.252 - 0.05 = 0.058 m = 5.8 cm (worst case: overshoot maximo) OK
+       Gap nominal (sem overshoot): 0.36 - 0.252 = 10.8 cm.
+
+     external_detection_timeout: 2.0 -> 5.0 s
+       Janela mais larga para o keepalive de zona cega funcionar mesmo se um
+       ciclo de LiDAR for perdido.
+
+     external_detection_translation_y: 0.0 -> -0.04
+       Correcao de assimetria de chassis: centro de colisao e +5 cm em Y
+       relativo ao base_link -> target deslocado -4 cm centra o corpo.
+
+     controller.k_phi:         3.0 -> 1.5 -> 2.5  (S13: mais forte para alinhar yaw no final)
+     controller.k_delta:       2.0 -> 1.0 -> 0.3  (S13: minimo para abordagem reta)
+     controller.v_linear_max:  0.18 -> 0.15 (abordagem mais controlada)
+     controller.slowdown_radius: 0.4 -> 0.5 (freia mais cedo antes da base)
+
+  5. [MODIFICADO] launch/docking.launch.py — parametros ArUco removidos
+
+     Parametros do estimador:
+       stop_distance: 0.30 -> 0.36
+       sector_half_deg: 30.0 (inalterado)
+       close_sector_deg: 60.0 (NOVO)
+       close_range_m:    0.5  (NOVO)
+
+ESTADO FINAL DA SESSAO 11:
+
+  Deteccao:
+    LiDAR-only, sem camera, sem ArUco.
+    Algoritmo dois passos: setor adaptativo (±30°/±60°), face_x banda central
+    ±20°, center_y ponto medio aresta-aresta.
+    Zona cega: cache mantido e publicado a 10 Hz durante abordagem final.
+
+  Abordagem:
+    Tres estagios: PRE_ALIGN(9,0,yaw=0) -> STAGING(12,0,yaw=0) -> DockRobot.
+    navigate_to_staging_pose=False.
+    Robô chega com yaw≈0 e ΔY<4cm; graceful controller so corrige X.
+
+  Parada:
+    stop_distance=0.36 m: target publicado a 12.875 m (face em 13.235 m).
+    filter_coef=0.5: filtro estabilizado antes de o robo chegar perto.
+    docking_threshold=0.05: isDocked() dispara de forma confiavel.
+    Gap garantido: 5.8 cm worst case, 10.8 cm nominal.
 
 ================================================================================
 SESSAO 10 -- 2026-06-17
@@ -234,30 +553,48 @@ O QUE ESTA FUNCIONANDO (CONFIRMADO)
 ================================================================================
 
 [1] PILHA TF COMPLETA E ESTAVEL
-    map -> odom -> base_footprint -> base_link -> chassis -> laser_frame / camera_link
+    map -> odom -> base_footprint -> base_link -> chassis -> laser_frame
     - odom_to_tf.py publica odom->base_footprint com get_clock().now()
+    - camera_link presente mas nao usado (ArUco removido na S11)
 
-[2] ARUCO DETECTADO
-    - DICT_4X4_1000 ID=771, marker_size=0.15m
-    - Camera e ArUco alinhados em altura 0.265 m
+[2] DETECCAO LIDAR-ONLY (SESSAO 11)
+    - dock_pose_estimator.py reescrito: sem camera, sem ArUco
+    - Setor adaptativo ±30°/±60°, face_x banda central ±20°
+    - center_y: ponto medio aresta-aresta (spread >15 cm) ou media
+    - Zona cega (0.30m LiDAR min_range): cache keepalive a 10 Hz
 
-[3] dock_pose_estimator.py publicando /detected_dock_pose
-    - LiDAR setor adaptativo +-30/+-60 graus
-
-[4] SISTEMA DE BATERIA + FILA DE TAREFAS
+[3] SISTEMA DE BATERIA + FILA DE TAREFAS
     - Drain 0.5%/s, Charge 1.0%/s
     - Fila FIFO, 4 tipos de tarefa (/task/goto_pose, inspect, patrol, deliver)
     - Emergencia a 5%: aborta e retorna
 
-[5] GALPAO DE FABRICA (SESSAO 9)
+[4] GALPAO DE FABRICA (SESSAO 9)
     - Warehouse 30x50 m com prateleiras e barreiras como obstaculos de Nav2
     - Dock na parede direita world(13,0), robo nasce em world(0,0)
-    - HOME_CHARGING declarado quando DockRobot retorna status=4 (docking_threshold=0.05m)
+    - HOME_CHARGING declarado quando DockRobot retorna status=4
 
-[6] CICLO COMPLETO COM TAREFAS (SESSAO 10)
-    - go_charge funciona em qualquer estado de tarefa (GOING_TO_TASK, EXECUTING_TASK)
+[5] CICLO COMPLETO COM TAREFAS (SESSAO 10)
+    - go_charge funciona em qualquer estado de tarefa
     - State guards em callbacks async previnem duplo DockRobot
-    - Segundo retorno ao dock alinha corretamente (igual ao primeiro)
+
+[6] ABORDAGEM SEM EMPURRAO LATERAL (SESSAO 11)
+    - Pre-alinhamento em dois passos: odom(9,0,yaw=0) -> odom(12,0,yaw=0)
+    - navigate_to_staging_pose=False: graceful controller so percorre ~0.93 m
+    - Robo chega ao dock com yaw≈0 e ΔY<4 cm (sem empurrar a base)
+
+[7] PARADA GARANTIDA ANTES DA BASE (SESSOES 11-13)
+    - stop_distance=0.42 m (validado empiricamente na S13)
+    - filter_coef=0.5, docking_threshold=0.05
+    - Zona cega coberta por cache keepalive a 10 Hz
+
+[8] BUG DE ZONA CEGA CORRIGIDO (SESSAO 12)
+    - Filtro r <= range_min exclui retornos clamped do Gazebo GPU lidar
+    - Guard duplo: cache quando min_range infinito OU clamped
+
+[9] ABORDAGEM RETA E CENTRADA (SESSAO 13)
+    - target_y fixo em dock_y_odom=0.0 elimina deslocamento lateral
+    - k_phi=2.5 / k_delta=0.3: yaw final proximo de 0 (sem torto)
+    - stop_distance parametro dinamico (ros2 param set sem restart)
 
 ================================================================================
 COMO INICIAR E EXECUTAR (SESSAO 9+)
@@ -371,11 +708,11 @@ GALPAO (warehouse 30x50 m):
   Barreiras: corredor de seguranca em X~-10, Y~[5,15]
   Corredor de acesso ao dock: Y~0, X de 0 a 13 m
 
-CAMERA E ARUCO:
-  Camera altura absoluta:  0.265 m
-  ArUco altura (dock):     0.265 m
-  marker_size param:       0.15 m
-  stop_distance:           0.30 m (robo para 30 cm a frente da face)
+LIDAR (SESSAO 11 -- SEM CAMERA/ARUCO):
+  LiDAR min_range:         0.30 m (zona cega quando robo a <24 cm da face)
+  LiDAR posicao:           base_link + (0.194, 0.050, 0.275) = 0.194 m a frente
+  sector_half_deg:         30.0° (normal) / 60.0° (perto, min_range <= 0.5 m)
+  stop_distance:           0.36 m (target publicado a face_odom - 0.36 m)
 
 NAVEGACAO:
   bt_navigator.global_frame: odom
@@ -383,16 +720,29 @@ NAVEGACAO:
   Global costmap:          25x25 m, origin(-5,-12)
 
 DOCKING:
-  Dock frame/pose:          odom / [13.0, 0.0, 0.0]
-  navigate_to_staging_pose: true
-  staging_x_offset:         -1.0 m  (staging = odom 12,0)
-  docking_threshold:        0.05 m  (unico criterio de sucesso)
-  dock_prestaging_tolerance: 0.5 m  (> xy_goal_tolerance=0.25m)
-  DOCK_X_ODOM:              12.7 m  (para log e dist check em falha)
-  DOCK_Y_ODOM:              0.0 m
-  ALIGN_TOL_XY:             2.0 m   (raio para forcar HOME_CHARGING apos DOCK_MAX_FAILS)
-  DOCK_MAX_FAILS:           4 (falha 4x + dist<=2m -> forca HOME; dist>2m -> pausa 15s)
+  Dock frame/pose:           odom / [13.0, 0.0, 0.0]  (origem do modelo)
+  Face do dock (odom):       13.235 m  (origem + local offset 0.235 m)
+  Robot front from base_link: 0.252 m  (colisao: -0.0145 + 0.533/2)
+  navigate_to_staging_pose:  false  (S11: robo pre-alinhado pelo charging_manager)
+  staging_x_offset:          -1.0 m  (staging = odom 12,0; usado se nav=True)
+  stop_distance:             0.42 m  -> target em odom 12.815 m (validado S13)
+  dock_y_odom:               0.0 m   (Y fixo do dock — nao usar oy detectado)
+  filter_coef:               0.5     (EMA rapido; converge <1 s -- critico!)
+  docking_threshold:         0.05 m  (threshold atingivel pelo graceful controller)
+  external_detection_timeout: 5.0 s  (keepalive de zona cega cobre a janela)
+  external_detection_translation_y: 0.0 m  (S13: substituido por dock_y_odom)
+  dock_prestaging_tolerance: 0.5 m   (> xy_goal_tolerance=0.25m)
+  DOCK_X_ODOM:               12.7 m  (para dist check em falha)
+  DOCK_Y_ODOM:               0.0 m
+  ALIGN_TOL_XY:              2.0 m   (raio para forcar HOME_CHARGING apos DOCK_MAX_FAILS)
+  DOCK_MAX_FAILS:            4 (falha 4x + dist<=2m -> forca HOME; dist>2m -> realinha)
   SEM check de Y/yaw apos status=4 (SLAM drift invalida verificacao em odom)
+  PRE_ALIGN: odom(9, 0, yaw=0)   STAGING: odom(12, 0, yaw=0)
+
+GEOMETRIA DE PARADA (S11):
+  target_x = 13.235 - 0.36 = 12.875 m
+  gap nominal  = 13.235 - (12.875 + 0.252) = 10.8 cm
+  gap worst    = 13.235 - (12.875 + 0.05 + 0.252) = 5.8 cm  (>= 5 cm OK)
 
 BATERIA:
   Drain:  0.5%/s  -> 100->0 em 200 s
@@ -400,10 +750,15 @@ BATERIA:
   MIN_FOR_TASK: 40%   LOW_AFTER: 20%   EMERGENCY: 5%
 
 STARTUP:
-  AUTOSTART_DELAY: 30 s (Nav2 t=20s, docking server t=25s)
+  AUTOSTART_DELAY: 45 s (S13: margem extra para maquinas mais lentas)
+
+GEOMETRIA DE PARADA (S13):
+  target_x = 13.235 - 0.42 = 12.815 m
+  target_y = 0.0 m (fixo -- dock_y_odom)
+  controller: k_phi=2.5, k_delta=0.3
 
 ================================================================================
-ARQUIVOS MODIFICADOS (ACUMULADO -- SESSAO 9)
+ARQUIVOS MODIFICADOS (ACUMULADO -- SESSAO 13)
 ================================================================================
 
 worlds/factory.world
@@ -424,6 +779,14 @@ nodes/charging_manager.py
     [S9p2] DOCK_X_ODOM=12.7, ALIGN_TOL_XY=0.5 (substitui ALIGN_TOL_Y=0.05)
     [S9p2] self._robot_x rastreado em _odom_cb()
     [S9p2] _dock_res: verificacao 2D dist+yaw; sem forca HOME_CHARGING em falha
+    [S11]  REFATORADO: abordagem em 3 estagios (PRE_ALIGN -> STAGING -> DockRobot)
+           PRE_ALIGN_X=9.0, STAGING_X=12.0 — ambos com yaw=0
+           _nav_to_pre_align -> _pre_align_res -> _nav_to_staging -> _stg_res -> _start_docking
+    [S11]  navigate_to_staging_pose=False (robo ja alinhado pelo charging_manager)
+    [S11]  DOCK_MAX_FAILS fallback: chama _start_returning_home() (reposiciona do zero)
+    [S11]  REMOVIDOS: estados NAVIGATING_TO_STAGING, CENTERING; constantes CTR_*;
+           funcoes _centering_*, _staging_acc/_res, _navigate_to_staging
+    [S13]  AUTOSTART_DELAY: 30 -> 45 s (margem extra para maquinas lentas)
 
 config/docking_params.yaml
     [S3]   dock_prestaging_tolerance: 1.5->0.25m; staging_x_offset: -0.7->-1.0m
@@ -431,11 +794,29 @@ config/docking_params.yaml
     [S7]   docking_threshold: 0.02->0.05
     [S8]   dock pose: [5,3,0]->[1,0,0]
     [S9p1] dock pose: [1,0,0]->[13,0,0]
+    [S11]  filter_coef: 0.1 -> 0.5  (CRITICO: sem isso EMA lento -> atropelava)
+    [S11]  docking_threshold: 0.05 -> 0.02 -> 0.05 (revertido; 0.02 causava loop)
+    [S11]  external_detection_timeout: 2.0 -> 5.0 s
+    [S11]  external_detection_translation_y: 0.0 -> -0.04 (assimetria chassis)
+    [S11]  k_phi: 3.0->1.5; k_delta: 2.0->1.0; v_linear_max: 0.18->0.15
+    [S13]  external_detection_translation_y: -0.04 -> 0.0 (substituido por dock_y_odom)
+    [S13]  k_phi: 1.5 -> 2.5; k_delta: 1.0 -> 0.3 (abordagem reta, yaw final = 0)
+    [S11]  slowdown_radius: 0.4->0.5; use_collision_detection: false
 
 launch/palmares_bot.launch.py
     [S3]   +odom_to_tf, +joint_state_publisher; spawn (-3,-3); delays Nav2/docking
     [S8]   Spawn: (-3,-3) -> (1,0,yaw=0)
     [S9p1] World: test.world -> factory.world; Spawn: (1,0) -> (0,0)
+
+launch/docking.launch.py
+    [S11]  CRIADO (separado do palmares_bot.launch.py)
+    [S11]  stop_distance: 0.30 -> 0.36; +close_sector_deg=60; +close_range_m=0.5
+    [S11]  Removidos parametros ArUco/camera
+    [S12]  stop_distance: 0.36 -> 0.42
+    [S13]  stop_distance: 0.42 (validado empiricamente; 0.41 atropela)
+
+models/charging_dock/model.sdf
+    [S11]  Visual do painel ArUco removido; so body_visual(STL) e body_collision(box)
 
 config/nav_params.yaml
     [S4]   bt_navigator.global_frame: map->odom; SmacPlanner2D; costmap 20x20m odom
@@ -447,6 +828,16 @@ nodes/alignment_test.py
 nodes/dock_pose_estimator.py
     [S4]   TF lookup: msg.header.stamp -> rclpy.time.Time().to_msg()
     [S4]   LiDAR sempre ativo (sem pre-requisito ArUco)
+    [S11]  REESCRITO: LiDAR-only (removido ArUco/camera totalmente)
+           Algoritmo: 2 passos, setor adaptativo ±30/±60°, face_x banda ±20°,
+           center_y ponto medio aresta-aresta
+    [S11]  Cache de zona cega: _cached_target_{x,y,yaw} + _publish_cached()
+           chamado em todos os early-returns do _scan_cb
+    [S12]  Filtro: r < range_min -> r <= range_min (exclui clamped do Gazebo GPU lidar)
+           Guard duplo apos primeiro passo: cache se min_range inf OU clamped
+    [S13]  Parametro dock_y_odom (default 0.0): target_y fixo em vez de oy detectado
+           Fix: deslocamento lateral causado pelo offset Y do robo no staging
+    [S13]  add_on_set_parameters_callback: stop_distance e dock_y_odom dinamicos
 
 nodes/odom_to_tf.py
     [S3]   CRIADO
@@ -490,4 +881,44 @@ ATENCAO -- LICOES APRENDIDAS
     verificar dist 2D antes de forcar estado
 - AUTOSTART_DELAY deve ser > tempo de inicializacao do docking server (25 s):
     usar 30 s garante que Nav2 e docking server estejam prontos
+
+--- SESSAO 11 ---
+
+- filter_coef baixo (0.1) e causa de "atropelamento" mesmo com stop_distance correto:
+    EMA demora >3 s para convergir de 13.0 (pose YAML inicial) para 12.875 (target).
+    Robo persegue target filtrado em ~12.96 e ultrapassa o ponto correto.
+    Com 0.5: convergencia em <1 s — target estabilizado antes de o robo chegar perto.
+    REGRA: filter_coef deve ser alto o suficiente para o filtro estabilizar em
+    tempo << tempo_de_abordagem (distancia_staging / v_linear_max = 0.875/0.15 = 5.8 s).
+
+- docking_threshold pequeno demais (0.02 m) causa loop infinito de retentativas:
+    Graceful controller com v_linear_min=0.05 m/s nao consegue precisao de 2 cm.
+    Robot ultrapassa 2.1 cm -> isDocked() nunca dispara -> approach_timeout (45 s)
+    -> DockRobot falha -> charging_manager retenta -> "andando infinitamente".
+    Usar 0.05 m: compativel com v_linear_min=0.05 e frequencia 50 Hz.
+
+- Zona cega do LiDAR e causa de colisao quando sem cache keepalive:
+    LiDAR min_range=0.30 m; LiDAR esta 0.194 m a frente do base_link.
+    Zona cega comeca quando face_dock < 0.30 + 0.194 = 0.494 m do base_link
+    -> robo ainda a 0.494 - 0.252 = 24 cm da face.
+    Sem cache: estimador para de publicar -> apos external_detection_timeout (2 s)
+    docking server usa pose YAML [13.0, 0.0] -> robo vai para X=13.0 -> colisao!
+    Solucao: _publish_cached() em cada early-return do _scan_cb (10 Hz keepalive).
+
+- navigate_to_staging_pose=True com robo ja proximo do dock causa caos em retry:
+    Em retry (apos DockRobot falhar), servidor manda robo ao staging (12.0)
+    mesmo estando em (13.1, 0) — robô faz navegacao reversa, fica confuso.
+    Solucao: navigate_to_staging_pose=False + charging_manager faz pre-alinhamento.
+
+- Abordagem sem pre-alinhamento: graceful controller empurra dock lateralmente:
+    Sem PRE_ALIGN: robo chega ao staging de qualquer direcao com yaw errado.
+    Graceful controller corrige yaw + Y ao mesmo tempo durante os 0.93 m finais
+    -> gera componente lateral que empurra a face do dock para alinhamento.
+    Solucao: dois passos de Nav2 (PRE_ALIGN + STAGING) antes de DockRobot;
+    robo chega com yaw≈0 e ΔY < 4 cm; graceful controller so corrige X.
+
+- Formula de garantia de gap minimo >= 5 cm:
+    stop_distance - robot_front_offset - docking_threshold >= 0.05
+    Com robot_front=0.252 e threshold=0.05: stop_distance >= 0.352 m
+    Usar 0.36 para margem: 0.36 - 0.252 - 0.05 = 0.058 m = 5.8 cm OK.
 ================================================================================
