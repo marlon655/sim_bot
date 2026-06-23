@@ -13,7 +13,7 @@
 O robô **palmares_bot** realiza um ciclo completamente autônomo de carregamento em uma estação de docking (`charging_dock`) instalada na parede de um galpão de fábrica simulado. O ciclo completo é:
 
 1. Robô nasce em `odom(0,0)` no centro do galpão
-2. Após 45s (Nav2 e docking server sobem), navega autonomamente ~12m até a base de carregamento em `odom(13,0)`
+2. Após ~55s (Nav2 em t=20s, docking server em t=25s, AUTOSTART_DELAY=30s → total t=55s), navega autonomamente ~12m até a base de carregamento em `odom(13,0)`
 3. Executa a aproximação precisa usando LiDAR (e fallback com câmera + ArUco)
 4. Fica em `HOME_CHARGING` carregando a bateria simulada
 5. Quando bateria ≥ 40%, aceita tarefas da fila (ir a um ponto, inspecionar, patrulhar, entregar)
@@ -32,6 +32,7 @@ sim_ws/src/sim_bot/
 │   ├── nav_params.yaml         # Nav2 completo (bt_navigator, costmaps, planner, etc.)
 │   ├── slam_params.yaml        # slam_toolbox (online async)
 │   ├── twist_mux_params.yaml   # Multiplexador de velocidade (nav vs teleop vs charging)
+│   ├── usb_cam_params.yaml     # Driver usb_cam: C270 640×480 MJPG @ 30fps (robô real)
 │   └── joy_params.yaml         # Parâmetros do joystick
 ├── description/
 │   ├── palmares_bot.urdf.xacro # URDF principal do robô
@@ -40,10 +41,13 @@ sim_ws/src/sim_bot/
 │   ├── common.xacro            # Macros de inércia e materiais
 │   └── ...
 ├── launch/
-│   ├── palmares_bot.launch.py  # Launch principal (Gazebo + SLAM + Nav2 + docking)
-│   ├── docking.launch.py       # Launch do sistema de docking
-│   ├── slam.launch.py          # slam_toolbox isolado
-│   ├── nav.launch.py           # Nav2 isolado
+│   ├── palmares_bot.launch.py       # Launch principal (Gazebo + SLAM + Nav2 + docking)
+│   ├── palmares_bot_real.launch.py  # Launch para hardware real (sem Gazebo)
+│   ├── docking.launch.py            # Launch do docking (simulação, use_sim_time=True)
+│   ├── docking_real.launch.py       # Launch do docking (hardware real, use_sim_time=False)
+│   ├── camera_real.launch.py        # Launch da câmera USB C270 (robô real)
+│   ├── slam.launch.py               # slam_toolbox isolado
+│   ├── nav.launch.py                # Nav2 isolado
 │   └── ...
 ├── models/
 │   └── charging_dock/
@@ -59,8 +63,13 @@ sim_ws/src/sim_bot/
 ├── meshes/
 │   ├── palmares.stl            # Malha 3D do corpo do robô
 │   └── base_carregamento.stl   # Malha da base de carregamento
-├── rviz/bot.rviz               # Configuração do RViz
-└── SESSAO_PROGRESSO.txt        # Histórico detalhado de todas as 13 sessões
+├── rviz/bot.rviz                    # Configuração do RViz
+├── SESSAO_PROGRESSO.txt             # Histórico detalhado de todas as 13 sessões
+├── README.md                        # Visão geral, início rápido e tabela de documentação
+├── INSTALACAO.md                    # Instalação completa de todas as dependências
+├── PASSAGEM_CONHECIMENTO.md         # Arquitetura, parâmetros, decisões de design
+├── TUTORIAL_CAMERA_REAL.md          # Configurar câmera C270 física no robô real
+└── TROUBLESHOOTING.md               # Erros comuns e soluções rápidas
 ```
 
 ---
@@ -163,8 +172,8 @@ Offset front (colisão):      X = -0.0145 + 0.533/2 ≈ +0.252 m
 
 **Câmera RGB** (`camera.xacro`):
 - Frame: `camera_link` / `camera_link_optical`
-- Posição: chassis joint + offset → altura absoluta = 0.265m (MUDAR PARA A ALTURA REAL APÓS  aplciar a cam )
-- Resolução: padrão Gazebo (~640×480) (MUDAR PARA A RESOLUÇÃO REAL)
+- Posição: chassis joint + offset → altura absoluta = 0.265m *(medir no robô físico e ajustar o joint Z em `camera.xacro`)*
+- Resolução simulação: 1280×720 URDF atual (C720-like) — **atualizar para 640×480 e FOV real da C270** (ver `TUTORIAL_CAMERA_REAL.md` Seção 8)
 - Publica: `/camera/image`, `/camera/camera_info`
 
 ### 4.3 Árvore TF
@@ -237,13 +246,13 @@ Face do dock:     odom(13.235, 0.0) — origem 13.0 + offset local 0.235m
 
 ### 6.2 Cache na Zona Cega
 
-O LiDAR tem `min_range = 0.30m`. Quando o robô fica a menos de ~24cm da face, o LiDAR fica cego e para de publicar. O estimador usa `_publish_cached()` em todos os early-returns para manter o último valor publicado durante essa zona cega (duração ~0.9s). Sem isso, o opennav_docking faz fallback para a pose YAML (X=13.0) e o robô colide.
-Dando para alterar para dimsensão real do LiDAR
+O LiDAR tem `min_range = 0.30m`. Quando o robô fica a menos de ~24cm da face, o LiDAR fica cego e para de publicar. A zona cega (~0.9s de duração, percorrendo ~9cm) é coberta pelo parâmetro `external_detection_timeout: 2.0s` no `docking_params.yaml`: o `docking_server` continua usando a última pose conhecida por até 2s antes de declarar falha. Se o `min_range` mudar para o LiDAR real, ajustar a distância de zona cega e verificar que está dentro do timeout.
+
 ### 6.3 Parâmetros Dinâmicos
 
-`stop_distance` pode ser ajustado sem restart:
+`stop_distance` pode ser ajustado sem restart (padrão = 0.30m):
 ```bash
-ros2 param set /dock_pose_estimator stop_distance 0.42
+ros2 param set /dock_pose_estimator stop_distance 0.35
 ```
 
 ### 6.4 Parâmetros (docking.launch.py)
@@ -379,7 +388,7 @@ t=55s   charging_manager dispara autostart → RETURNING_HOME → DOCKING
 t≈100s  HOME_CHARGING (robô chegou e está no dock)
 ```
 
-**Por que 45s de AUTOSTART_DELAY?** Nav2 sobe em ~20s, docking server em ~25s. Usar 45s dá margem suficiente para ambos estarem prontos antes da primeira tentativa de docking.
+**Por que 30s de AUTOSTART_DELAY?** O `charging_manager` sobe junto com o docking server em t=25s (`TimerAction`). Com `AUTOSTART_DELAY=30s`, o autostart dispara em t=55s — quando Nav2 (~20s) e docking server (~25s) já estão estáveis há pelo menos 30s. No código: `charging_manager.py` linha 96.
 
 ---
 
@@ -437,8 +446,8 @@ ros2 topic hz /camera/image
 # Estado da máquina de estados:
 ros2 topic echo /charging_manager/state --once
 
-# Ajustar stop_distance sem restart:
-ros2 param set /dock_pose_estimator stop_distance 0.42
+# Ajustar stop_distance sem restart (0.30 é o padrão; exemplo de ajuste fino):
+ros2 param set /dock_pose_estimator stop_distance 0.35
 
 # Árvore TF completa:
 ros2 run tf2_tools view_frames

@@ -1,0 +1,28 @@
+# Parâmetros do driver usb_cam para a Logitech C270
+# Usado por: launch/camera_real.launch.py
+#
+# Tópicos publicados (após remaps no launch file):
+#   /camera/image       — sensor_msgs/Image (RGB8)
+#   /camera/camera_info — sensor_msgs/CameraInfo
+
+/**:
+  ros__parameters:
+    video_device: "/dev/camera_c270"
+    image_width: 640
+    image_height: 480
+    pixel_format: "mjpeg2rgb"     # MJPG → RGB8; se falhar tentar "yuyv2rgb"
+    camera_frame_id: "camera_link_optical"
+    io_method: "mmap"
+    framerate: 30.0
+
+    # Auto-controles
+    auto_white_balance: true
+    auto_exposure: true
+    autofocus: false              # C270 tem foco fixo
+
+    # Arquivo de calibração — o launch file sobrescreve este valor com o caminho
+    # absoluto resolvido via os.path.expanduser('~') para evitar hardcodar o usuário
+    camera_info_url: "file:///home/robo02/.ros/camera_info/c270.yaml"
+
+    # Deve corresponder ao gz_frame_id da simulação: "camera_link_optical"
+    camera_name: "camera"
