@@ -57,6 +57,7 @@ def generate_launch_description():
     rviz = LaunchConfiguration('rviz')
     joy = LaunchConfiguration('joy')
     tof_lidar = LaunchConfiguration('tof_lidar')
+    camera = LaunchConfiguration('camera')
     slam = LaunchConfiguration('slam')
     nav = LaunchConfiguration('nav')
     nav_params_file = LaunchConfiguration('nav_params_file')
@@ -145,6 +146,11 @@ def generate_launch_description():
         default_value=_as_launch_bool(launch_defaults.get('tof_lidar', True)),
         description='Enable the simulated 3D ToF lidar point cloud sensor')
 
+    declare_camera = DeclareLaunchArgument(
+        'camera',
+        default_value=_as_launch_bool(launch_defaults.get('camera', True)),
+        description='Enable the simulated RGB camera sensor')
+
     declare_slam = DeclareLaunchArgument(
         'slam',
         default_value=_as_launch_bool(launch_defaults.get('slam', True)),
@@ -186,6 +192,7 @@ def generate_launch_description():
             'rviz': rviz,
             'joy': joy,
             'tof_lidar': tof_lidar,
+            'camera': camera,
             'use_sim_time': 'true',
         }.items())
 
@@ -232,6 +239,7 @@ def generate_launch_description():
         declare_rviz,
         declare_joy,
         declare_tof_lidar,
+        declare_camera,
         declare_slam,
         declare_nav,
         declare_nav_params_file,

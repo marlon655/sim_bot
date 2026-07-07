@@ -26,6 +26,7 @@ def generate_launch_description():
     rviz = LaunchConfiguration('rviz')
     joy = LaunchConfiguration('joy')
     tof_lidar = LaunchConfiguration('tof_lidar')
+    camera = LaunchConfiguration('camera')
     use_sim_time = LaunchConfiguration('use_sim_time')
 
     models_path = os.path.join(package_share, 'models')
@@ -90,6 +91,11 @@ def generate_launch_description():
         default_value='True',
         description='Enable the simulated 3D ToF lidar point cloud sensor')
 
+    declare_camera = DeclareLaunchArgument(
+        'camera',
+        default_value='True',
+        description='Enable the simulated RGB camera sensor')
+
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
         default_value='true',
@@ -107,7 +113,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'robot_description': ParameterValue(
-                Command(['xacro ', robot_urdf, ' tof_lidar:=', tof_lidar]),
+                Command(['xacro ', robot_urdf, ' tof_lidar:=', tof_lidar, ' camera:=', camera]),
                 value_type=str),
         }])
 
@@ -185,6 +191,7 @@ def generate_launch_description():
         declare_rviz,
         declare_joy,
         declare_tof_lidar,
+        declare_camera,
         declare_use_sim_time,
         gazebo_models_path,
         rviz2,

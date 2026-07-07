@@ -16,6 +16,7 @@ rviz_config: rviz/bot.rviz
 rviz: true
 joy: false
 tof_lidar: true
+camera: true
 
 # Navigation
 slam: false
