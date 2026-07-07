@@ -15,6 +15,7 @@ bridge_config: config/gz_bridge.yaml
 rviz_config: rviz/bot.rviz
 rviz: true
 joy: false
+tof_lidar: true
 
 # Navigation
 slam: false

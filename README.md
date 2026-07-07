@@ -157,6 +157,7 @@ A navegacao da simulacao fica centralizada no `nav_hub`.
 Arquivos principais:
 
 ```text
+nav_hub/launch/essentials.launch.py
 nav_hub/launch/route_graph/sim_nav_graph.launch.py
 nav_hub/config/sim_nav_params.yaml
 nav_hub/maps/aceleradora.yaml
@@ -167,7 +168,9 @@ nav_hub/graphs/aceleradoras.json
 nav_hub/btree/nav_on_route_graph_oregon.xml
 ```
 
-O `sim_nav_graph.launch.py` sobe a pilha Nav2 para simulacao:
+O `sim_bot` chama `nav_hub/launch/essentials.launch.py` com
+`mode:=simulation`. Esse launch, por sua vez, chama
+`sim_nav_graph.launch.py`, que sobe a pilha Nav2 para simulacao:
 
 ```text
 map_server

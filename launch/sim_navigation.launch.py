@@ -64,8 +64,9 @@ def generate_launch_description():
         actions=[
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    os.path.join(nav_hub_share, 'launch', 'route_graph', 'sim_nav_graph.launch.py')),
+                    os.path.join(nav_hub_share, 'launch', 'essentials.launch.py')),
                 launch_arguments={
+                    'mode': 'simulation',
                     'use_sim_time': use_sim_time,
                     'params_file': nav_params_file,
                     'route': route,

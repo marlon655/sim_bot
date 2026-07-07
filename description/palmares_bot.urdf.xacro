@@ -1,12 +1,16 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="palmares_bot">
     <!-- Robot description for Palmares Bot (differential drive with STL mesh) -->
+    <xacro:arg name="tof_lidar" default="true"/>
 
     <!-- Include common macros (inertia helpers + materials) -->
     <xacro:include filename="common.xacro"/>
 
     <!-- Include Palmares lidar (parents to 'chassis' link defined below) -->
     <xacro:include filename="palmares_lidar.xacro"/>
+    <xacro:if value="$(arg tof_lidar)">
+        <xacro:include filename="palmares_tof_lidar.xacro"/>
+    </xacro:if>
 
     <!-- ══════════════════════════════════════════════════════════════════
          ROBOT DIMENSIONS  (STL in mm → scaled to metres at 0.001)

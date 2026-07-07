@@ -25,6 +25,7 @@ def generate_launch_description():
     headless = LaunchConfiguration('headless')
     rviz = LaunchConfiguration('rviz')
     joy = LaunchConfiguration('joy')
+    tof_lidar = LaunchConfiguration('tof_lidar')
     use_sim_time = LaunchConfiguration('use_sim_time')
 
     models_path = os.path.join(package_share, 'models')
@@ -84,6 +85,11 @@ def generate_launch_description():
         default_value='False',
         description='Enable joystick tele-operation if true')
 
+    declare_tof_lidar = DeclareLaunchArgument(
+        'tof_lidar',
+        default_value='True',
+        description='Enable the simulated 3D ToF lidar point cloud sensor')
+
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
         default_value='true',
@@ -101,7 +107,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'robot_description': ParameterValue(
-                Command(['xacro ', robot_urdf]),
+                Command(['xacro ', robot_urdf, ' tof_lidar:=', tof_lidar]),
                 value_type=str),
         }])
 
@@ -178,6 +184,7 @@ def generate_launch_description():
         declare_headless,
         declare_rviz,
         declare_joy,
+        declare_tof_lidar,
         declare_use_sim_time,
         gazebo_models_path,
         rviz2,
