@@ -48,12 +48,12 @@ def generate_launch_description():
 
     declare_spawn_x = DeclareLaunchArgument(
         'spawn_x',
-        default_value='18.34406852722168',
+        default_value='-0.2621192932128906',
         description='Initial Gazebo spawn X position')
 
     declare_spawn_y = DeclareLaunchArgument(
         'spawn_y',
-        default_value='22.93574333190918',
+        default_value='12.350018501281738',
         description='Initial Gazebo spawn Y position')
 
     declare_spawn_z = DeclareLaunchArgument(

@@ -4,22 +4,22 @@
     <joint name="tof_lidar_joint" type="fixed">
         <parent link="chassis"/>
         <child link="tof_lidar_frame"/>
-        <origin xyz="0.08 0 0.18" rpy="0 0 0"/>
+        <origin xyz="0.065 0 0.18" rpy="0 0 0"/>
     </joint>
 
     <link name="tof_lidar_frame">
         <visual>
             <geometry>
-                <box size="0.060 0.030 0.030"/>
+                <box size="0.030 0.030 0.030"/>
             </geometry>
             <material name="black"/>
         </visual>
         <collision>
             <geometry>
-                <box size="0.060 0.030 0.030"/>
+                <box size="0.030 0.030 0.030"/>
             </geometry>
         </collision>
-        <xacro:inertial_box mass="0.05" x="0.060" y="0.030" z="0.030">
+        <xacro:inertial_box mass="0.05" x="0.030" y="0.030" z="0.030">
             <origin xyz="0 0 0" rpy="0 0 0"/>
         </xacro:inertial_box>
     </link>
